@@ -1,0 +1,2 @@
+ALTER TABLE suppliers ADD COLUMN deleted_at DATETIME NULL;
+ALTER TABLE suppliers ADD COLUMN deleted_by VARCHAR(100) NULL;
