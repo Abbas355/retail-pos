@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { salesApi } from "@/lib/api";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { getLocalDateString } from "@/lib/utils";
+import type { Sale } from "@/types/pos";
 import {
   BarChart,
   Bar,
@@ -33,37 +34,36 @@ const DATE_RANGE_OPTIONS: { value: DatePreset; label: string }[] = [
 
 function getDateRange(preset: DatePreset, customFrom?: string, customTo?: string): { from: string; to: string } {
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const toDate = today.toISOString().split("T")[0];
+  const todayStr = getLocalDateString(now);
 
   switch (preset) {
     case "today":
-      return { from: toDate, to: toDate };
+      return { from: todayStr, to: todayStr };
     case "thisWeek": {
-      const day = today.getDay();
-      const weekStart = new Date(today);
-      weekStart.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
-      return { from: weekStart.toISOString().split("T")[0], to: toDate };
+      const day = now.getDay();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+      return { from: getLocalDateString(weekStart), to: todayStr };
     }
     case "thisMonth":
       return {
         from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`,
-        to: toDate,
+        to: todayStr,
       };
     case "last7": {
-      const from7 = new Date(today);
+      const from7 = new Date(now);
       from7.setDate(from7.getDate() - 6);
-      return { from: from7.toISOString().split("T")[0], to: toDate };
+      return { from: getLocalDateString(from7), to: todayStr };
     }
     case "last30": {
-      const from30 = new Date(today);
+      const from30 = new Date(now);
       from30.setDate(from30.getDate() - 29);
-      return { from: from30.toISOString().split("T")[0], to: toDate };
+      return { from: getLocalDateString(from30), to: todayStr };
     }
     case "custom":
-      return { from: customFrom || toDate, to: customTo || toDate };
+      return { from: customFrom || todayStr, to: customTo || todayStr };
     default:
-      return { from: toDate, to: toDate };
+      return { from: todayStr, to: todayStr };
   }
 }
 
@@ -84,10 +84,8 @@ const ReportsPage = () => {
   const [cashierFilter, setCashierFilter] = useState<string>("all");
   const [pieActiveIndex, setPieActiveIndex] = useState<number | undefined>(undefined);
 
-  const { data: sales = [], isLoading } = useQuery({
-    queryKey: ["sales"],
-    queryFn: () => salesApi.list(),
-  });
+  const [sales] = useLocalStorage<Sale[]>("pos_sales", []);
+  const isLoading = false;
 
   const cashiers = useMemo(() => {
     const set = new Set<string>();
@@ -102,7 +100,7 @@ const ReportsPage = () => {
 
   const filteredSales = useMemo(() => {
     return sales.filter((s) => {
-      const dateStr = s.date ? new Date(s.date).toISOString().split("T")[0] : "";
+      const dateStr = s.date ? getLocalDateString(s.date) : "";
       if (dateStr < dateRange.from || dateStr > dateRange.to) return false;
       if (paymentFilter !== "all" && s.paymentMethod !== paymentFilter) return false;
       if (cashierFilter !== "all" && s.cashier !== cashierFilter) return false;
@@ -113,7 +111,7 @@ const ReportsPage = () => {
   const barChartData = useMemo(() => {
     const byDate: Record<string, { date: string; revenue: number; count: number }> = {};
     filteredSales.forEach((s) => {
-      const dateStr = s.date ? new Date(s.date).toISOString().split("T")[0] : "";
+      const dateStr = s.date ? getLocalDateString(s.date) : "";
       if (!dateStr) return;
       if (!byDate[dateStr]) byDate[dateStr] = { date: dateStr, revenue: 0, count: 0 };
       byDate[dateStr].revenue += Number(s.total ?? 0);
@@ -331,27 +329,27 @@ const ReportsPage = () => {
               </div>
             </div>
 
-            <div className="lg:col-span-2 card-elevated p-4">
+            <div className="lg:col-span-2 card-elevated p-4 overflow-visible">
               <h2 className="font-heading text-lg font-semibold mb-4">Cash vs Card</h2>
-              <div className="h-[320px]">
+              <div className="h-[320px] min-h-0 overflow-visible">
                 {pieChartData.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-muted-foreground">
                     No payment data in this range
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
+                    <PieChart margin={{ top: 16, right: 80, bottom: 16, left: 80 }}>
                       <Pie
                         data={pieChartData}
                         cx="50%"
                         cy="50%"
                         innerRadius={60}
-                        outerRadius={100}
+                        outerRadius={80}
                         paddingAngle={2}
                         dataKey="value"
                         nameKey="name"
                         activeIndex={pieActiveIndex}
-                        activeShape={{ outerRadius: 108, strokeWidth: 2, stroke: "var(--background)" }}
+                        activeShape={{ outerRadius: 88, strokeWidth: 2, stroke: "var(--background)" }}
                         onMouseEnter={(_, index) => setPieActiveIndex(index)}
                         onMouseLeave={() => setPieActiveIndex(undefined)}
                         label={({ value }) => `$${Number(value).toFixed(2)}`}

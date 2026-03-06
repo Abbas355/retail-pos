@@ -254,9 +254,8 @@ const SuppliersPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove supplier from list?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will hide &quot;{deleteTarget?.name}&quot; from the list. The record is kept in the
-              database with deletion date and your name for audit. You can restore it later from the
-              database if needed.
+              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
+              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

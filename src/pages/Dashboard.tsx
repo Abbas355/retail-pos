@@ -1,4 +1,5 @@
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { getLocalDateString } from "@/lib/utils";
 import { SEED_PRODUCTS, SEED_CUSTOMERS } from "@/data/seedData";
 import { Product, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
@@ -12,8 +13,8 @@ const Dashboard = () => {
   const [sales] = useLocalStorage<Sale[]>("pos_sales", []);
   const [customers] = useLocalStorage("pos_customers", SEED_CUSTOMERS);
 
-  const today = new Date().toISOString().split("T")[0];
-  const todaySales = sales.filter((s) => s.date.startsWith(today));
+  const today = getLocalDateString(new Date());
+  const todaySales = sales.filter((s) => s.date && getLocalDateString(s.date) === today);
   const todayRevenue = todaySales.reduce((sum, s) => sum + s.total, 0);
   const lowStockProducts = products.filter((p) => p.stock <= p.lowStockThreshold);
   const totalRevenue = sales.reduce((sum, s) => sum + s.total, 0);

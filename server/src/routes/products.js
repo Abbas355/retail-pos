@@ -14,13 +14,16 @@ function toProduct(row) {
     category: row.category,
     lowStockThreshold: row.low_stock_threshold,
     hasSales: Boolean(row.has_sales),
+    hasPurchases: Boolean(row.has_purchases),
   };
 }
 
 router.get("/", async (_req, res) => {
   try {
     const rows = await query(
-      `SELECT p.*, EXISTS(SELECT 1 FROM sale_items si WHERE si.product_id = p.id) AS has_sales
+      `SELECT p.*,
+        EXISTS(SELECT 1 FROM sale_items si WHERE si.product_id = p.id) AS has_sales,
+        EXISTS(SELECT 1 FROM purchase_items pi WHERE pi.product_id = p.id) AS has_purchases
        FROM products p WHERE p.deleted_at IS NULL ORDER BY p.name`
     );
     res.json(rows.map(toProduct));
@@ -33,7 +36,9 @@ router.get("/", async (_req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const [row] = await query(
-      `SELECT p.*, EXISTS(SELECT 1 FROM sale_items si WHERE si.product_id = p.id) AS has_sales
+      `SELECT p.*,
+        EXISTS(SELECT 1 FROM sale_items si WHERE si.product_id = p.id) AS has_sales,
+        EXISTS(SELECT 1 FROM purchase_items pi WHERE pi.product_id = p.id) AS has_purchases
        FROM products p WHERE p.id = ? AND p.deleted_at IS NULL`,
       [req.params.id]
     );
@@ -85,9 +90,13 @@ router.delete("/:id", async (req, res) => {
       "SELECT 1 FROM sale_items WHERE product_id = ? LIMIT 1",
       [req.params.id]
     );
-    if (hasSalesRow) {
+    const [hasPurchaseRow] = await query(
+      "SELECT 1 FROM purchase_items WHERE product_id = ? LIMIT 1",
+      [req.params.id]
+    );
+    if (hasSalesRow || hasPurchaseRow) {
       return res.status(403).json({
-        error: "Cannot delete product with sales history. Only products with no sales can be removed.",
+        error: "Cannot delete product with sales or purchase history. Only products with no history can be removed.",
       });
     }
     const fromBody = req.body?.deletedBy != null ? String(req.body.deletedBy).trim() : null;
@@ -104,7 +113,7 @@ router.delete("/:id", async (req, res) => {
     res.status(204).send();
   } catch (err) {
     console.error("Product delete error:", err);
-    res.status(500).json({ error: "Failed to delete product" });
+    res.status(500).json({ error: err.message || "Failed to delete product" });
   }
 });
 

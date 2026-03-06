@@ -1,16 +1,36 @@
-const API = "/api";
-
-async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${url}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error?: string }).error || "Request failed");
+declare global {
+  interface Window {
+    electronAPI?: { getApiBaseUrl: () => string };
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
+}
+
+const getApiBase = (): string =>
+  typeof window !== "undefined" && window.electronAPI?.getApiBaseUrl?.()
+    ? `${window.electronAPI.getApiBaseUrl()}/api`
+    : "/api";
+
+async function fetchApi<T>(url: string, options?: RequestInit, retries = 3): Promise<T> {
+  const base = getApiBase();
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(`${base}${url}`, {
+        ...options,
+        headers: { "Content-Type": "application/json", ...options?.headers },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error((err as { error?: string }).error || "Request failed");
+      }
+      if (res.status === 204) return undefined as T;
+      return res.json();
+    } catch (e) {
+      lastErr = e;
+      if (i < retries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : "Request failed";
+  throw new Error(msg.includes("fetch") ? "Connection error. Ensure the app is running." : msg);
 }
 
 export async function login(username: string, password: string) {
@@ -115,4 +135,9 @@ export interface RolePermission {
 export const permissionsApi = {
   list: () => fetchApi<ApiPermission[]>("/permissions"),
   listRolePermissions: () => fetchApi<RolePermission[]>("/permissions/role-permissions"),
+};
+
+export const syncApi = {
+  pull: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/pull", { method: "POST" }),
+  push: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/push", { method: "POST" }),
 };

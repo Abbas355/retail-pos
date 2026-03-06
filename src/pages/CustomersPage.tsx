@@ -119,10 +119,19 @@ const CustomersPage = () => {
   const getPurchaseCount = (customerId: string) =>
     sales.filter((s) => s.customerId === customerId).length;
 
+  const isElectron = typeof window !== "undefined" && !!window.electronAPI;
+
   return (
     <div className="space-y-5 animate-slide-in">
       <div className="flex items-center justify-between">
-        <h1 className="font-heading text-2xl font-bold">Customers</h1>
+        <div>
+          <h1 className="font-heading text-2xl font-bold">Customers</h1>
+          {isElectron && (
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Add works offline. Use &quot;Sync with MySQL&quot; in the sidebar when online to sync with the main database.
+            </p>
+          )}
+        </div>
         <Button onClick={openAdd}>
           <Plus className="mr-1 h-4 w-4" /> Add Customer
         </Button>
@@ -225,9 +234,8 @@ const CustomersPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove customer from list?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will hide &quot;{deleteTarget?.name}&quot; from the list. The record is kept in the
-              database with deletion date and your name for audit. You can restore it later from the
-              database if needed.
+              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
+              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

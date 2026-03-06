@@ -72,7 +72,7 @@ router.delete("/:id", async (req, res) => {
     res.status(204).send();
   } catch (err) {
     console.error("Customer delete error:", err);
-    res.status(500).json({ error: "Failed to delete customer" });
+    res.status(500).json({ error: err.message || "Failed to delete customer" });
   }
 });
 

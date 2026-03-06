@@ -10,6 +10,8 @@ export interface Product {
   lowStockThreshold: number;
   /** True if product appears in any sale (from API) */
   hasSales?: boolean;
+  /** True if product appears in any purchase (from API) */
+  hasPurchases?: boolean;
 }
 
 export interface CartItem {

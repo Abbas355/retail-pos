@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Product } from "@/types/pos";
+import { Product, Sale, Purchase } from "@/types/pos";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useAuth } from "@/context/AuthContext";
 import { productsApi } from "@/lib/api";
 import { translateProductNameToUrdu } from "@/lib/productTranslation";
@@ -50,7 +51,29 @@ const InventoryPage = () => {
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
     queryFn: () => productsApi.list(),
+    refetchOnWindowFocus: false,
   });
+
+  const [localSales] = useLocalStorage<Sale[]>("pos_sales", []);
+  const [localPurchases] = useLocalStorage<Purchase[]>("pos_purchases", []);
+
+  const productIdsWithLocalHistory = useMemo(() => {
+    const salesIds = new Set<string>();
+    localSales.forEach((s) =>
+      s.items?.forEach((i) => i.product?.id && salesIds.add(i.product.id))
+    );
+    const purchaseIds = new Set<string>();
+    localPurchases.forEach((p) =>
+      p.items?.forEach((i) => i.productId && purchaseIds.add(i.productId))
+    );
+    return { sales: salesIds, purchases: purchaseIds };
+  }, [localSales, localPurchases]);
+
+  const hasHistory = (p: Product) =>
+    p.hasSales ||
+    p.hasPurchases ||
+    productIdsWithLocalHistory.sales.has(p.id) ||
+    productIdsWithLocalHistory.purchases.has(p.id);
 
   const existingCategories = useMemo(() => {
     const set = new Set<string>();
@@ -146,8 +169,8 @@ const InventoryPage = () => {
   };
 
   const confirmDelete = (p: Product) => {
-    if (p.hasSales) {
-      toast.error("Cannot delete product with sales history.");
+    if (hasHistory(p)) {
+      toast.error("Cannot delete product with sales or purchase history.");
       return;
     }
     setDeleteTarget(p);
@@ -161,10 +184,19 @@ const InventoryPage = () => {
     setEditingProduct((prev) => ({ ...prev, nameUr: urdu }));
   };
 
+  const isElectron = typeof window !== "undefined" && !!window.electronAPI;
+
   return (
     <div className="space-y-5 animate-slide-in">
       <div className="flex items-center justify-between">
-        <h1 className="font-heading text-2xl font-bold">{t("inventory.title")}</h1>
+        <div>
+          <h1 className="font-heading text-2xl font-bold">{t("inventory.title")}</h1>
+          {isElectron && (
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Add works offline. Use &quot;Sync with MySQL&quot; in the sidebar when online to sync with the main database.
+            </p>
+          )}
+        </div>
         {isAdmin && (
           <Button onClick={openAdd}>
             <Plus className="mr-1 h-4 w-4" /> {t("product.addProduct")}
@@ -230,17 +262,17 @@ const InventoryPage = () => {
                               <span className="inline-block">
                                 <button
                                   onClick={() => confirmDelete(p)}
-                                  disabled={p.hasSales}
+                                  disabled={hasHistory(p)}
                                   className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title={p.hasSales ? "Has sales history" : "Remove"}
+                                  title={hasHistory(p) ? "Has sales or purchase history" : "Remove"}
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               </span>
                             </TooltipTrigger>
                             <TooltipContent>
-                              {p.hasSales
-                                ? "Cannot delete: product has sales history"
+                              {hasHistory(p)
+                                ? "Cannot delete: product has sales or purchase history"
                                 : "Remove from list (record kept in database)"}
                             </TooltipContent>
                           </Tooltip>
@@ -394,7 +426,8 @@ const InventoryPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("product.removeProductConfirm")}</AlertDialogTitle>
             <AlertDialogDescription>
-              &quot;{deleteTarget?.name}&quot; {t("product.removeProductDescription")}
+              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
+              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
