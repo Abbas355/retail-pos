@@ -1,12 +1,8 @@
-import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { syncApi } from "@/lib/api";
-import { toast } from "sonner";
 import {
-  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, RefreshCw
+  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings
 } from "lucide-react";
 
 const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; roles: string[] }[] = [
@@ -18,30 +14,12 @@ const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; rol
   { to: "/suppliers", labelKey: "nav.suppliers", icon: Building2, roles: ["admin", "manager"] },
   { to: "/reports", labelKey: "nav.reports", icon: BarChart3, roles: ["admin", "manager"] },
   { to: "/users", labelKey: "nav.users", icon: UserCog, roles: ["admin"] },
+  { to: "/settings", labelKey: "nav.settings", icon: Settings, roles: ["admin", "manager"] },
 ];
 
 const AppSidebar = () => {
   const { t, i18n } = useTranslation();
   const { user, logout } = useAuth();
-  const queryClient = useQueryClient();
-  const [syncing, setSyncing] = useState(false);
-  const isElectron = typeof window !== "undefined" && !!window.electronAPI;
-
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const push = await syncApi.push();
-      const pull = await syncApi.pull();
-      if (push.ok || pull.ok) {
-        queryClient.invalidateQueries();
-        toast.success(push.ok && pull.ok ? "Synced with MySQL" : push.ok ? "Changes saved to MySQL" : "Data refreshed from MySQL");
-      } else toast.error(pull.error || push.error || "Sync failed");
-    } catch {
-      toast.error("MySQL not reachable. Connect and try again.");
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   return (
     <aside className="flex h-screen w-60 flex-col shrink-0 bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
@@ -94,17 +72,6 @@ const AppSidebar = () => {
         </nav>
 
         <div className="shrink-0 border-t border-sidebar-border p-4">
-        {isElectron && (
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={syncing}
-            className="mb-3 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Syncing..." : "Sync with MySQL"}
-          </button>
-        )}
         <div className="mb-3 flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-accent text-xs font-bold">
             {user?.name.charAt(0)}

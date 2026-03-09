@@ -89,6 +89,14 @@ export const suppliersApi = {
 
 export const salesApi = {
   list: () => fetchApi("/sales"),
+  pushSales: (sales: Array<{
+    items: Array<{ product: { id: string; name: string; price: number }; quantity: number }>;
+    total: number;
+    paymentMethod: "cash" | "card";
+    cashier: string;
+    customerId?: string;
+    date?: string;
+  }>) => fetchApi<{ ok: boolean; pushed: number; message?: string }>("/sales/sync", { method: "POST", body: JSON.stringify({ sales }) }),
   create: (data: {
     items: { product: { id: string; name: string; price: number }; quantity: number }[];
     total: number;

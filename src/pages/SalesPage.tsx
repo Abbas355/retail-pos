@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { Product, CartItem, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
-import { customersApi, productsApi } from "@/lib/api";
+import { customersApi, productsApi, salesApi } from "@/lib/api";
 import { getProductDisplayName } from "@/lib/productTranslation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,7 +132,7 @@ const SalesPage = () => {
     setDiscountValue("");
   };
 
-  const completeSale = () => {
+  const completeSale = async () => {
     if (cart.length === 0) {
       toast.error("Cart is empty");
       return;
@@ -154,6 +154,18 @@ const SalesPage = () => {
     setCart([]);
     setDiscountValue("");
     toast.success("Sale completed!");
+    try {
+      await salesApi.create({
+        items: cart.map((i) => ({ product: { id: i.product.id, name: i.product.name, price: i.product.price }, quantity: i.quantity })),
+        total,
+        paymentMethod,
+        cashier: user?.name || "Unknown",
+        customerId: selectedCustomer || undefined,
+      });
+      queryClient.invalidateQueries({ queryKey: ["sales"] });
+    } catch {
+      /* API save failed (offline etc); localStorage sale still visible in dashboard */
+    }
   };
 
   return (

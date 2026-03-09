@@ -1,0 +1,269 @@
+/**
+ * Parses incoming WhatsApp text or voice transcript into POS commands.
+ * Supports both exact text commands and voice-style variations (e.g. "list all products", "show low stock").
+ */
+
+const ADD_NAME_JUNK = /\b(it'?s|its|price|should|be|threshold|and|is|cost)\b/i;
+
+function extractCustomerNameOnly(raw) {
+  if (!raw || typeof raw !== "string") return raw;
+  const s = raw.trim();
+  const junk = /\s+(?:and\s+(?:its?|his|her|their)|it'?s|,)\s*(?:phone|number)/i;
+  const m = s.match(new RegExp("^(.+?)" + junk.source));
+  if (m) return m[1].trim();
+  if (/phone|number|\d/.test(s) || s.length > 30) {
+    const first = s.match(/^([A-Za-z\u00C0-\u024F]+)/);
+    return first ? first[1].trim() : s.split(/\s+/)[0] || s;
+  }
+  return s;
+}
+
+const SUPPLIER_JUNK_WORDS = /^(and|its?|his|her|the|phone|number|email|is|address|name)$/i;
+
+/** Match "it's name is X", "it's name X", "name is X" etc. – extract X only */
+const NAME_IS_PATTERN = /((?:it'?s|its?|his|her|their|the)\s+)?name\s+(?:is\s+)?(.+)/i;
+
+/** Extract ONLY the supplier name – no "it's name", "his phone number", etc. */
+function extractSupplierNameOnly(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  let s = raw.trim();
+  const nameIs = s.match(NAME_IS_PATTERN);
+  if (nameIs) s = nameIs[2].replace(/\s+and\s*$/i, "").trim();
+  const junk = /\s+(?:(?:and\s+)?(?:its?|his|her|their|the)\s+)?(?:phone\s*(?:number\s+)?(?:is\s+)?|email\s*(?:address\s+)?(?:is\s+)?|number)/i;
+  const m = s.match(new RegExp("^(.+?)" + junk.source));
+  if (m) s = m[1].trim();
+  s = s.replace(/\d+/g, "").replace(/\s*@\s*/g, "").trim();
+  const words = s.split(/\s+/).filter((w) => w.length > 0 && !SUPPLIER_JUNK_WORDS.test(w));
+  return words.slice(0, 3).join(" ") || "";
+}
+
+/** Extract phone – only digits. Returns empty string if none found. */
+function extractPhoneOnly(text) {
+  if (!text || typeof text !== "string") return "";
+  const digits = text.replace(/\D/g, "");
+  return digits;
+}
+
+function parseCommand(text) {
+  if (!text || typeof text !== "string") return { action: "unknown" };
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  const lower = trimmed.toLowerCase();
+
+  // --- List products (voice: "list products", "list all products", "show products", etc.)
+  if (/^(list|show)\s*(all\s*)?(the\s*)?products?$/.test(lower) || lower === "list products" || lower === "list product") {
+    return { action: "list_products" };
+  }
+  if (lower.includes("list") && lower.includes("product") && !lower.includes("add") && !/delete|remove/.test(lower)) {
+    return { action: "list_products" };
+  }
+
+  // --- Low stock (voice: "low stock", "show low stock", "what's low on stock", etc.)
+  if (/^(show\s*)?(what'?s\s*)?low\s*(on\s*)?stock(\s*items?)?\.?$/i.test(lower) || lower === "low stock" || lower === "lowstock") {
+    return { action: "low_stock" };
+  }
+  if (lower.includes("low") && lower.includes("stock") && !lower.includes("add") && !/delete|remove|search/.test(lower)) {
+    return { action: "low_stock" };
+  }
+
+  // --- Help (voice: "help", "help me", "show help", "commands")
+  if (/^(show\s*)?help(\s+me)?\.?$/i.test(lower) || lower === "help" || lower === "?" || lower === "commands") {
+    return { action: "help" };
+  }
+
+  // --- Voice sale (add X to cart, payment cash/card, complete sale) + Urdu: "X sell kardo payment cash hai"
+  const voiceSaleAdd = lower.match(/add\s+(.+?)\s+(?:to\s+cart|,|and\s+payment|pay\s+with|payment\s+is)/i) ||
+    lower.match(/(?:complete\s+sale|make\s+sale)\s+(?:for\s+)?(.+?)(?:\s*,\s*|\s+payment|\s+pay\s+with|$)/i) ||
+    lower.match(/(?:a\s+)?(.+?)\s+sell\s+(?:kardo|karo)/i) ||
+    lower.match(/sell\s+(?:kardo\s+)?(?:a\s+)?(.+?)(?:\s+payment|\s+pay\s+with|$)/i);
+  if (voiceSaleAdd && (/cart|sale|sell|payment|pay\s+with|complete|kardo|karo/i.test(lower) || /add\s+\w+/.test(lower))) {
+    const payMatch = lower.match(/payment\s+is\s+(\w+)|pay\s+with\s+(\w+)|payment\s+(\w+)|payment\s+(\w+)\s+hai|(\w+)\s+hai\s+.*(?:payment|pay)/i);
+    const payVal = payMatch ? (payMatch[1] || payMatch[2] || payMatch[3] || payMatch[4] || payMatch[5] || "").toLowerCase() : "";
+    const paymentMethod = /card/i.test(payVal) ? "card" : "cash";
+    let productPart = (voiceSaleAdd[1] || "").replace(/\s*(?:and\s+)?payment\s+(?:is\s+)?\w+(\s+hai)?.*$/i, "").replace(/\s*(?:on\s+)?sale\s+ko\s+complete.*$/i, "").replace(/\s*,\s*complete.*$/i, "").replace(/\s+payment\s+.*$/i, "").trim();
+    productPart = productPart.replace(/^(a|the)\s+/i, "").trim();
+    const productNames = productPart.split(/\s+and\s+|\s*,\s*/).map((s) => s.replace(/^\d+\s+/, "").trim()).filter(Boolean);
+    const items = [];
+    for (const n of productNames) {
+      const qtyMatch = n.match(/^(\d+)\s+(.+)$/);
+      items.push({ name: qtyMatch ? qtyMatch[2].trim() : n, quantity: qtyMatch ? parseInt(qtyMatch[1], 10) || 1 : 1 });
+    }
+    if (items.length > 0) return { action: "voice_sale", items, paymentMethod };
+  }
+
+  // --- Sales report today (voice: "give me today's sales", "revenue generated by today's product sales", etc.)
+  if (/today'?s?\s+(sales|revenue|report)/i.test(lower) || /(sales|revenue|report)\s+(of\s+)?today/i.test(lower) ||
+      /give\s+me\s+(today'?s?\s+)?(sales|revenue)/i.test(lower) || /how\s+much\s+sales\s+happened\s+today/i.test(lower) ||
+      /show\s+(today'?s?\s+)?(sales|revenue|report|top)/i.test(lower) ||
+      /(what\s+product\s+generated|top\s+product|best\s+selling)\s+.*today/i.test(lower) ||
+      /today.*(sales|revenue|top\s+product|best\s+selling)/i.test(lower) ||
+      /revenue\s+generated\s+by\s+today/i.test(lower) || /revenue\s+generated\s+.*today/i.test(lower)) {
+    return { action: "sales_report_today" };
+  }
+
+  // --- Add customer help (how to add customer)
+  if (/^(how\s+)?(can\s+i|do\s+i|to)\s+add\s+(a\s+)?customer\.?$/i.test(lower) ||
+      /^add\s+customer\s+help$/i.test(lower) ||
+      lower === "how to add customer" || lower === "how can i add customer") {
+    return { action: "add_customer_help" };
+  }
+
+  // --- Add supplier help (how to add supplier, supplier insertion method, etc.)
+  if (/^(how\s+)?(can\s+i|do\s+i|to)\s+add\s+(a\s+)?supplier\.?$/i.test(lower) ||
+      /^add\s+supplier\s+help$/i.test(lower) ||
+      /supplier\s+(insertion|add|registration|method|process)/i.test(lower) ||
+      /how\s+(do\s+i\s+)?(add|register|insert)\s+supplier/i.test(lower) ||
+      lower === "how to add supplier" || lower === "how can i add supplier" ||
+      lower === "supplier insertion method" || lower === "add supplier help") {
+    return { action: "add_supplier_help" };
+  }
+
+  // --- Add customer (add customer <name> <phone> — extract ONLY the name, e.g. "asad" from "asad and its phone number is 3074405123")
+  const addCustomerNatural = trimmed.match(/^add\s+customer\s+(.+?)\s+(?:and\s+(?:its?|his|her)|it'?s|,)\s*(?:phone\s*(?:number\s+)?(?:is\s+)?)?(\d[\d\s\-]*)\s*$/i);
+  if (addCustomerNatural) {
+    const name = addCustomerNatural[1].trim();
+    const phone = addCustomerNatural[2].replace(/\D/g, "");
+    if (name && phone) return { action: "add_customer", name: extractCustomerNameOnly(name), phone };
+  }
+  const addCustomerMatch = trimmed.match(/^add\s+customer\s+(.+?)\s+(\+?[\d][\d\s\-]*)$/i);
+  if (addCustomerMatch) {
+    const rawName = addCustomerMatch[1].trim();
+    const phone = addCustomerMatch[2].replace(/\D/g, "");
+    if (!phone) return { action: "unknown" };
+    return { action: "add_customer", name: extractCustomerNameOnly(rawName), phone };
+  }
+
+  // --- Add supplier (full sentence: "hamza his phone number is 1234567890 and the email address is a@gmail.com")
+  const phoneMatch = trimmed.match(/phone\s*(?:number\s+)?is\s+(\d[\d\s\-]*)/i);
+  const emailMatch = trimmed.match(/email\s*(?:address\s+)?(?:is\s+)?([^\s]+@[^\s]+)/i);
+  const afterAdd = trimmed.replace(/^add\s+supplier\s+/i, "").trim();
+  if (afterAdd && afterAdd !== trimmed && !/^(help|how)/i.test(afterAdd)) {
+    let namePart = afterAdd;
+    if (phoneMatch) namePart = namePart.replace(/\s*phone\s*(?:number\s+)?is\s+[\d\s\-]+/i, "");
+    if (emailMatch) namePart = namePart.replace(/\s*(?:and\s+)?(?:the\s+)?email\s*(?:address\s+)?(?:is\s+)?[^\s]+@[^\s]+/i, "");
+    namePart = namePart.replace(/\s*(?:and\s+)?(?:his|her|its?|the)\s*$/i, "").trim();
+    const name = extractSupplierNameOnly(namePart);
+    if (name) {
+      const phone = phoneMatch ? extractPhoneOnly(phoneMatch[1]) || null : null;
+      const email = emailMatch ? emailMatch[1].trim() : "";
+      return { action: "add_supplier", name, phone, email };
+    }
+  }
+  // --- Add supplier (regex patterns for structured input)
+  const addSupplierNatural = trimmed.match(/^add\s+supplier\s+(.+?)\s+(?:(?:and\s+)?(?:its?|his|her)|it'?s|,)\s*(?:phone\s*(?:number\s+)?(?:is\s+)?)?(\d[\d\s\-]*)(?:\s+(?:and\s+)?(?:the\s+)?(?:email\s*(?:address\s+)?(?:is\s+)?)?([^\s]+@[^\s]+))?\s*$/i);
+  if (addSupplierNatural) {
+    const name = extractSupplierNameOnly(addSupplierNatural[1].trim());
+    const phone = extractPhoneOnly(addSupplierNatural[2]) || null;
+    const email = addSupplierNatural[3] ? addSupplierNatural[3].trim() : "";
+    if (name) return { action: "add_supplier", name, phone, email };
+  }
+  const addSupplierWithPhone = trimmed.match(/^add\s+supplier\s+(.+?)\s+(\+?[\d][\d\s\-]*)(?:\s+(?:and\s+)?(?:the\s+)?(?:email\s*(?:address\s+)?(?:is\s+)?)?([^\s]+@[^\s]+))?\s*$/i);
+  if (addSupplierWithPhone) {
+    const rawName = addSupplierWithPhone[1].trim();
+    const name = extractSupplierNameOnly(rawName);
+    const phone = extractPhoneOnly(addSupplierWithPhone[2]) || null;
+    const email = addSupplierWithPhone[3] ? addSupplierWithPhone[3].trim() : "";
+    if (name) return { action: "add_supplier", name, phone, email };
+  }
+  const addSupplierNameOnly = trimmed.match(/^add\s+supplier\s+(.+)$/i);
+  if (addSupplierNameOnly) {
+    const raw = addSupplierNameOnly[1].trim();
+    if (raw && !/^(help|how)/i.test(raw)) {
+      const name = extractSupplierNameOnly(raw);
+      if (name) return { action: "add_supplier", name, phone: null, email: "" };
+    }
+  }
+
+  // --- Search (voice: "search milk", "search for milk")
+  const searchMatch = trimmed.match(/^search\s+(?:for\s+)?(.+)$/i);
+  if (searchMatch) {
+    const term = searchMatch[1].trim();
+    if (term) return { action: "search", term };
+  }
+
+  // --- Delete/remove product (voice: "delete product milk", "remove the product milk")
+  const deleteMatch = trimmed.match(/^(delete|remove)\s+(?:the\s+)?product\s+(.+)$/i);
+  if (deleteMatch) {
+    const nameOrId = deleteMatch[2].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+
+  // --- Set threshold (text + voice: "set threshold for milk to 10", "manage threshold milk 10", "threshold for Bread to 5")
+  const setThresholdTo = trimmed.match(/^(?:set|manage)\s+threshold\s+(?:for\s+)?(.+?)\s+to\s+(\d+)\s*$/i);
+  if (setThresholdTo) {
+    const nameOrId = setThresholdTo[1].trim();
+    const threshold = parseInt(setThresholdTo[2], 10);
+    if (nameOrId && !Number.isNaN(threshold) && threshold >= 0) return { action: "set_threshold", nameOrId, threshold };
+  }
+  const thresholdFor = trimmed.match(/^(?:low\s+stock\s+)?threshold\s+(?:for\s+)?(.+?)\s+(?:to\s+)?(\d+)\s*$/i);
+  if (thresholdFor) {
+    const nameOrId = thresholdFor[1].trim();
+    const threshold = parseInt(thresholdFor[2], 10);
+    if (nameOrId && !Number.isNaN(threshold) && threshold >= 0) return { action: "set_threshold", nameOrId, threshold };
+  }
+  const thresholdProductFirst = trimmed.match(/^(?:set|manage)\s+(?:low\s+stock\s+)?threshold\s+(\d+)\s+(?:for\s+)?(.+)$/i);
+  if (thresholdProductFirst) {
+    const threshold = parseInt(thresholdProductFirst[1], 10);
+    const nameOrId = thresholdProductFirst[2].trim();
+    if (nameOrId && !Number.isNaN(threshold) && threshold >= 0) return { action: "set_threshold", nameOrId, threshold };
+  }
+  const manageThreshold = trimmed.match(/^manage\s+threshold\s+(?:for\s+)?(.+?)\s+(\d+)\s*$/i);
+  if (manageThreshold) {
+    const nameOrId = manageThreshold[1].trim();
+    const threshold = parseInt(manageThreshold[2], 10);
+    if (nameOrId && !Number.isNaN(threshold) && threshold >= 0) return { action: "set_threshold", nameOrId, threshold };
+  }
+
+  // --- Set stock (text + voice: "set stock for milk to 50", "stock milk 50", "update stock Bread 100")
+  const setStockTo = trimmed.match(/^(?:set|update|manage)\s+stock\s+(?:for\s+)?(.+?)\s+to\s+(\d+)\s*$/i);
+  if (setStockTo) {
+    const nameOrId = setStockTo[1].trim();
+    const stock = parseInt(setStockTo[2], 10);
+    if (nameOrId && !Number.isNaN(stock) && stock >= 0) return { action: "set_stock", nameOrId, stock };
+  }
+  const stockFor = trimmed.match(/^stock\s+(?:for\s+)?(.+?)\s+(?:to\s+)?(\d+)\s*$/i);
+  if (stockFor) {
+    const nameOrId = stockFor[1].trim();
+    const stock = parseInt(stockFor[2], 10);
+    if (nameOrId && !Number.isNaN(stock) && stock >= 0) return { action: "set_stock", nameOrId, stock };
+  }
+  const stockProductFirst = trimmed.match(/^(?:set|update|manage)\s+stock\s+(\d+)\s+(?:for\s+)?(.+)$/i);
+  if (stockProductFirst) {
+    const stock = parseInt(stockProductFirst[1], 10);
+    const nameOrId = stockProductFirst[2].trim();
+    if (nameOrId && !Number.isNaN(stock) && stock >= 0) return { action: "set_stock", nameOrId, stock };
+  }
+  const manageStock = trimmed.match(/^manage\s+stock\s+(?:for\s+)?(.+?)\s+(\d+)\s*$/i);
+  if (manageStock) {
+    const nameOrId = manageStock[1].trim();
+    const stock = parseInt(manageStock[2], 10);
+    if (nameOrId && !Number.isNaN(stock) && stock >= 0) return { action: "set_stock", nameOrId, stock };
+  }
+
+  // --- Add product (text: "add product milk 50", "add product lazania 100 50" with optional threshold)
+  // Reject if name contains descriptive words – let intent handle natural language (e.g. "talha it's price should be 60000")
+  const addWithThreshold = trimmed.match(/^add\s+(?:the\s+)?product\s+(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s*$/i);
+  if (addWithThreshold) {
+    const name = addWithThreshold[1].trim();
+    if (!ADD_NAME_JUNK.test(name)) {
+      const price = parseFloat(addWithThreshold[2]);
+      const threshold = parseInt(addWithThreshold[3], 10);
+      if (name && !Number.isNaN(price) && price >= 0 && !Number.isNaN(threshold) && threshold >= 0) {
+        return { action: "add_product", name, price, threshold };
+      }
+    }
+  }
+  const addMatch = trimmed.match(/^add\s+(?:the\s+)?product\s+(.+)\s+(\d+(?:\.\d+)?)\s*$/i);
+  if (addMatch) {
+    const name = addMatch[1].trim();
+    if (!ADD_NAME_JUNK.test(name)) {
+      const price = parseFloat(addMatch[2]);
+      if (name && !Number.isNaN(price) && price >= 0) {
+        return { action: "add_product", name, price };
+      }
+    }
+  }
+
+  return { action: "unknown" };
+}
+
+module.exports = { parseCommand };

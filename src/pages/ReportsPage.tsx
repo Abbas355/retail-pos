@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useMemo, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { getLocalDateString } from "@/lib/utils";
 import type { Sale } from "@/types/pos";
 import {
@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { salesApi } from "@/lib/api";
 import { BarChart3, TrendingUp, DollarSign, Filter } from "lucide-react";
 
 type DatePreset = "today" | "thisWeek" | "thisMonth" | "last7" | "last30" | "custom";
@@ -77,15 +78,39 @@ const CARD_COLOR = "#3b82f6";
 const BAR_COLOR = "hsl(var(--primary))";
 
 const ReportsPage = () => {
-  const [datePreset, setDatePreset] = useState<DatePreset>("thisMonth");
+  const [datePreset, setDatePreset] = useState<DatePreset>("last7");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [cashierFilter, setCashierFilter] = useState<string>("all");
   const [pieActiveIndex, setPieActiveIndex] = useState<number | undefined>(undefined);
 
-  const [sales] = useLocalStorage<Sale[]>("pos_sales", []);
-  const isLoading = false;
+  const { data: apiSales = [], isLoading } = useQuery({
+    queryKey: ["sales"],
+    queryFn: () => salesApi.list(),
+    refetchOnWindowFocus: true,
+    refetchInterval: 15000,
+  });
+  const sales: Sale[] = (apiSales as any[]).map((s) => ({
+    id: s.id,
+    items: (s.items || []).map((i: any) => ({
+      product: {
+        id: i.productId,
+        name: i.product?.name || i.productName || "",
+        price: i.price,
+        cost: i.product?.cost ?? 0,
+        stock: 0,
+        category: "",
+        lowStockThreshold: 5,
+      },
+      quantity: i.quantity,
+    })),
+    total: s.total,
+    paymentMethod: s.paymentMethod || "cash",
+    customerId: s.customerId,
+    date: s.date,
+    cashier: s.cashier || "",
+  }));
 
   const cashiers = useMemo(() => {
     const set = new Set<string>();
@@ -117,12 +142,21 @@ const ReportsPage = () => {
       byDate[dateStr].revenue += Number(s.total ?? 0);
       byDate[dateStr].count += 1;
     });
-    const list = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-    return list.map((d) => ({
-      ...d,
-      label: new Date(d.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.date.slice(0, 4) !== new Date().getFullYear().toString() ? "2-digit" : undefined }),
-    }));
-  }, [filteredSales]);
+    const from = new Date(dateRange.from + "T12:00:00");
+    const to = new Date(dateRange.to + "T12:00:00");
+    const allDates: string[] = [];
+    for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+      allDates.push(getLocalDateString(d));
+    }
+    const result = allDates.map((dateStr) => {
+      const entry = byDate[dateStr] || { date: dateStr, revenue: 0, count: 0 };
+      return {
+        ...entry,
+        label: new Date(dateStr + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: dateStr.slice(0, 4) !== new Date().getFullYear().toString() ? "2-digit" : undefined }),
+      };
+    });
+    return result;
+  }, [filteredSales, dateRange]);
 
   const pieChartData = useMemo(() => {
     const cash = filteredSales.filter((s) => (s.paymentMethod ?? "").toLowerCase() === "cash").reduce((sum, s) => sum + Number(s.total ?? 0), 0);

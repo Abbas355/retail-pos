@@ -14,6 +14,7 @@ import CustomersPage from "@/pages/CustomersPage";
 import SuppliersPage from "@/pages/SuppliersPage";
 import ReportsPage from "@/pages/ReportsPage";
 import UsersPage from "@/pages/UsersPage";
+import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -34,6 +35,7 @@ const AppRoutes = () => {
         <Route path="/suppliers" element={isAdmin || user?.role === "manager" ? <SuppliersPage /> : <Navigate to="/" replace />} />
         <Route path="/reports" element={isAdmin || user?.role === "manager" ? <ReportsPage /> : <Navigate to="/" replace />} />
         <Route path="/users" element={isAdmin ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/settings" element={isAdmin || user?.role === "manager" ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { getLocalDateString } from "@/lib/utils";
+import { salesApi } from "@/lib/api";
 import { SEED_PRODUCTS, SEED_CUSTOMERS } from "@/data/seedData";
 import { Product, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
@@ -10,17 +12,39 @@ import {
 const Dashboard = () => {
   const { user } = useAuth();
   const [products] = useLocalStorage<Product[]>("pos_products", SEED_PRODUCTS);
-  const [sales] = useLocalStorage<Sale[]>("pos_sales", []);
+  const { data: apiSales = [] } = useQuery({
+    queryKey: ["sales"],
+    queryFn: () => salesApi.list(),
+    refetchOnWindowFocus: true,
+    refetchInterval: 15000,
+  });
+  const sales: Sale[] = (apiSales as any[]).map((s) => ({
+    id: s.id,
+    items: (s.items || []).map((i: any) => ({
+      product: { id: i.productId, name: i.product?.name || i.productName || "", price: i.price, cost: 0, stock: 0, category: "", lowStockThreshold: 5 },
+      quantity: i.quantity,
+    })),
+    total: s.total,
+    paymentMethod: s.paymentMethod || "cash",
+    customerId: s.customerId,
+    date: s.date,
+    cashier: s.cashier || "",
+  }));
   const [customers] = useLocalStorage("pos_customers", SEED_CUSTOMERS);
 
   const today = getLocalDateString(new Date());
-  const todaySales = sales.filter((s) => s.date && getLocalDateString(s.date) === today);
+  const todaySales = sales.filter((s) => {
+    if (!s.date) return false;
+    const saleDateStr = getLocalDateString(s.date);
+    return saleDateStr === today;
+  });
+  const todaySalesCount = todaySales.length;
   const todayRevenue = todaySales.reduce((sum, s) => sum + s.total, 0);
   const lowStockProducts = products.filter((p) => p.stock <= p.lowStockThreshold);
   const totalRevenue = sales.reduce((sum, s) => sum + s.total, 0);
 
   const stats = [
-    { label: "Today's Sales", value: todaySales.length, icon: ShoppingCart, color: "text-primary" },
+    { label: "Today's Sales", value: todaySalesCount, icon: ShoppingCart, color: "text-primary" },
     { label: "Today's Revenue", value: `$${todayRevenue.toFixed(2)}`, icon: DollarSign, color: "text-success" },
     { label: "Total Revenue", value: `$${totalRevenue.toFixed(2)}`, icon: TrendingUp, color: "text-info" },
     { label: "Products", value: products.length, icon: Package, color: "text-muted-foreground" },
@@ -42,7 +66,12 @@ const Dashboard = () => {
               <stat.icon className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">{stat.label}</p>
+              <p className="text-sm text-muted-foreground">
+                {stat.label}
+                {stat.label === "Today's Sales" && (
+                  <span className="ml-1 text-xs">({today})</span>
+                )}
+              </p>
               <p className="font-heading text-xl font-bold">{stat.value}</p>
             </div>
           </div>
@@ -71,7 +100,7 @@ const Dashboard = () => {
           <div className="space-y-2">
             {todaySales.slice(-5).reverse().map((sale) => (
               <div key={sale.id} className="flex items-center justify-between rounded-lg bg-muted px-4 py-2.5 text-sm">
-                <span>{sale.items.map(i => i.product.name).join(", ")}</span>
+                <span>{sale.items.map((i) => i.product?.name || (i as any).productName || "").filter(Boolean).join(", ") || "Sale"}</span>
                 <span className="font-semibold">${sale.total.toFixed(2)}</span>
               </div>
             ))}
