@@ -10,13 +10,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Percent } from "lucide-react";
+import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Percent, Barcode } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 const SalesPage = () => {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const locale = i18n.language;
   const { data: products = [] } = useQuery({
@@ -37,6 +49,8 @@ const SalesPage = () => {
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [barcodeScan, setBarcodeScan] = useState("");
+  const [productNotFoundBarcode, setProductNotFoundBarcode] = useState<string | null>(null);
 
   const { data: customers = [] } = useQuery({
     queryKey: ["customers"],
@@ -77,7 +91,8 @@ const SalesPage = () => {
         const searchLower = search.toLowerCase();
         const matchesSearch =
           p.name.toLowerCase().includes(searchLower) ||
-          (p.nameUr?.toLowerCase().includes(searchLower) ?? false);
+          (p.nameUr?.toLowerCase().includes(searchLower) ?? false) ||
+          (p.barcode?.toLowerCase().includes(searchLower) ?? false);
         const matchesCategory =
           categoryFilter === ALL_ITEMS || (p.category?.trim() === categoryFilter);
         return matchesSearch && matchesCategory && p.stock > 0;
@@ -99,6 +114,25 @@ const SalesPage = () => {
       }
       return [...prev, { product, quantity: 1 }];
     });
+  };
+
+  const addByBarcode = async () => {
+    const bc = barcodeScan.trim();
+    if (!bc) return;
+    setBarcodeScan("");
+    try {
+      const p = await productsApi.getByBarcode(bc);
+      if (p && p.stock > 0) {
+        addToCart(p);
+        toast.success(`${p.name} × 1 added`);
+      } else if (p && p.stock <= 0) {
+        toast.error("Out of stock");
+      } else {
+        setProductNotFoundBarcode(bc);
+      }
+    } catch {
+      setProductNotFoundBarcode(bc);
+    }
   };
 
   const updateQuantity = (productId: string, delta: number) => {
@@ -172,14 +206,27 @@ const SalesPage = () => {
     <div className="flex h-[calc(100vh-3rem)] gap-5 animate-slide-in">
       {/* Left: Product catalog */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        <div className="relative mb-4 shrink-0 w-full min-w-0 p-2">
-          <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-          <Input
-            className="w-full min-w-0 pl-9 pr-4"
-            placeholder="Search items..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+        <div className="flex flex-col gap-2 mb-4 shrink-0 p-2">
+          <div className="relative w-full min-w-0">
+            <Barcode className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              className="w-full min-w-0 pl-9 pr-4"
+              placeholder="Scan barcode..."
+              value={barcodeScan}
+              onChange={(e) => setBarcodeScan(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addByBarcode()}
+              autoComplete="off"
+            />
+          </div>
+          <div className="relative w-full min-w-0">
+            <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              className="w-full min-w-0 pl-9 pr-4"
+              placeholder="Search items..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
 
         <div className="flex gap-2 mb-4 overflow-x-auto pb-1 shrink-0">
@@ -503,6 +550,30 @@ const SalesPage = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!productNotFoundBarcode} onOpenChange={() => setProductNotFoundBarcode(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Product not found</AlertDialogTitle>
+            <AlertDialogDescription>
+              Barcode &quot;{productNotFoundBarcode}&quot; is not in the inventory. Do you want to add this product?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (productNotFoundBarcode) {
+                  navigate("/inventory", { state: { addBarcode: productNotFoundBarcode } });
+                  setProductNotFoundBarcode(null);
+                }
+              }}
+            >
+              Add new product
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -239,4 +239,40 @@ router.post("/", async (req, res) => {
   }
 });
 
+/** DELETE /api/sales/:id – void a sale (restore stock, remove sale). Used for undo. */
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const items = await query(
+      "SELECT product_id, quantity FROM sale_items WHERE sale_id = ?",
+      [id]
+    );
+    if (!items || items.length === 0) {
+      return res.status(404).json({ error: "Sale not found or already voided" });
+    }
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const it of items) {
+        await conn.execute(
+          "UPDATE products SET stock = stock + ? WHERE id = ?",
+          [Number(it.quantity) || 0, it.product_id]
+        );
+      }
+      await conn.execute("DELETE FROM sale_items WHERE sale_id = ?", [id]);
+      await conn.execute("DELETE FROM sales WHERE id = ?", [id]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
+    res.status(204).send();
+  } catch (err) {
+    console.error("Sale void error:", err);
+    res.status(500).json({ error: "Failed to void sale" });
+  }
+});
+
 export default router;

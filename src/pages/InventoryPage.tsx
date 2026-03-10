@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Product, Sale, Purchase } from "@/types/pos";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useAuth } from "@/context/AuthContext";
@@ -23,13 +24,14 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Plus, Pencil, Trash2, Search, AlertTriangle, Languages } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, AlertTriangle, Languages, Barcode } from "lucide-react";
 import { toast } from "sonner";
 
 const NEW_CATEGORY_VALUE = "__new__";
 const emptyProduct: Partial<Product> = {
   name: "",
   nameUr: "",
+  barcode: "",
   price: undefined,
   cost: undefined,
   stock: undefined,
@@ -40,6 +42,8 @@ const emptyProduct: Partial<Product> = {
 const InventoryPage = () => {
   const { t } = useTranslation();
   const { user, isAdmin } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -47,6 +51,7 @@ const InventoryPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isNewCategory, setIsNewCategory] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [barcodeScan, setBarcodeScan] = useState("");
 
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
@@ -132,11 +137,41 @@ const InventoryPage = () => {
     onError: (err: Error) => toast.error(err.message || "Failed to remove product"),
   });
 
-  const openAdd = () => {
-    setEditingProduct(emptyProduct);
+  const openAdd = (prefillBarcode?: string) => {
+    setEditingProduct({ ...emptyProduct, barcode: prefillBarcode ?? "" });
     setIsEditing(false);
     setIsNewCategory(false);
     setDialogOpen(true);
+  };
+
+  useEffect(() => {
+    const addBarcode = (location.state as { addBarcode?: string } | null)?.addBarcode;
+    if (addBarcode && isAdmin) {
+      setEditingProduct({ ...emptyProduct, barcode: addBarcode });
+      setIsEditing(false);
+      setIsNewCategory(false);
+      setDialogOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, isAdmin, location.pathname, navigate]);
+
+  const handleBarcodeScan = async () => {
+    const bc = barcodeScan.trim();
+    if (!bc) return;
+    setBarcodeScan("");
+    try {
+      const p = await productsApi.getByBarcode(bc);
+      if (p) {
+        openEdit(p);
+        toast.success(`Found: ${p.name}`);
+      } else {
+        openAdd(bc);
+        toast.info("New product detected. Please enter product details.");
+      }
+    } catch {
+      openAdd(bc);
+      toast.info("New product detected. Please enter product details.");
+    }
   };
   const openEdit = (p: Product) => {
     setEditingProduct({ ...p });
@@ -158,13 +193,14 @@ const InventoryPage = () => {
     const stock = Number(editingProduct.stock) || 0;
     const category = (editingProduct.category ?? "").trim();
     const lowStockThreshold = Number(editingProduct.lowStockThreshold) ?? 5;
+    const barcode = (editingProduct.barcode ?? "").trim() || undefined;
     if (isEditing && editingProduct.id) {
       updateMutation.mutate({
         id: editingProduct.id,
-        data: { name, nameUr: nameUr ?? null, price, cost, stock, category, lowStockThreshold },
+        data: { name, nameUr: nameUr ?? null, barcode: barcode ?? null, price, cost, stock, category, lowStockThreshold },
       });
     } else {
-      createMutation.mutate({ name, nameUr, price, cost, stock, category, lowStockThreshold });
+      createMutation.mutate({ name, nameUr, barcode, price, cost, stock, category, lowStockThreshold });
     }
   };
 
@@ -204,14 +240,33 @@ const InventoryPage = () => {
         )}
       </div>
 
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder={t("inventory.searchProducts")}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      <div className="flex flex-wrap gap-4 items-end">
+        <div className="relative max-w-sm flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder={t("inventory.searchProducts")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        {isAdmin && (
+          <div className="flex gap-2 items-center min-w-[280px]">
+            <div className="relative flex-1">
+              <Barcode className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Scan barcode to add product..."
+                value={barcodeScan}
+                onChange={(e) => setBarcodeScan(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleBarcodeScan()}
+              />
+            </div>
+            <Button variant="secondary" onClick={handleBarcodeScan} disabled={!barcodeScan.trim()}>
+              Add
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="card-elevated overflow-hidden">
@@ -222,6 +277,7 @@ const InventoryPage = () => {
             <TableHeader>
               <TableRow>
                 <TableHead>{t("common.name")}</TableHead>
+                <TableHead>Barcode</TableHead>
                 <TableHead>{t("common.category")}</TableHead>
                 <TableHead className="text-right">{t("common.price")}</TableHead>
                 <TableHead className="text-right">{t("common.cost")}</TableHead>
@@ -234,6 +290,7 @@ const InventoryPage = () => {
               {filtered.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{p.barcode || "—"}</TableCell>
                   <TableCell>{p.category}</TableCell>
                   <TableCell className="text-right">${p.price.toFixed(2)}</TableCell>
                   <TableCell className="text-right">${p.cost.toFixed(2)}</TableCell>
@@ -297,6 +354,15 @@ const InventoryPage = () => {
           </DialogHeader>
           <div className="overflow-y-auto flex-1 min-h-0 px-6 pb-6">
           <div className="grid gap-4 py-2">
+            <div className="grid gap-1.5">
+              <Label>Barcode</Label>
+              <Input
+                type="text"
+                placeholder="Scan or enter barcode"
+                value={editingProduct.barcode ?? ""}
+                onChange={(e) => setEditingProduct({ ...editingProduct, barcode: e.target.value })}
+              />
+            </div>
             <div className="grid gap-1.5">
               <Label>{t("product.name")}</Label>
               <Input

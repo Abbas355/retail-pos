@@ -10,6 +10,7 @@ import Dashboard from "@/pages/Dashboard";
 import SalesPage from "@/pages/SalesPage";
 import InventoryPage from "@/pages/InventoryPage";
 import PurchasesPage from "@/pages/PurchasesPage";
+import ExpensesPage from "@/pages/ExpensesPage";
 import CustomersPage from "@/pages/CustomersPage";
 import SuppliersPage from "@/pages/SuppliersPage";
 import ReportsPage from "@/pages/ReportsPage";
@@ -31,6 +32,7 @@ const AppRoutes = () => {
         <Route path="/sales" element={<SalesPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/purchases" element={isAdmin || user?.role === "manager" ? <PurchasesPage /> : <Navigate to="/" replace />} />
+        <Route path="/expenses" element={isAdmin || user?.role === "manager" ? <ExpensesPage /> : <Navigate to="/" replace />} />
         <Route path="/customers" element={<CustomersPage />} />
         <Route path="/suppliers" element={isAdmin || user?.role === "manager" ? <SuppliersPage /> : <Navigate to="/" replace />} />
         <Route path="/reports" element={isAdmin || user?.role === "manager" ? <ReportsPage /> : <Navigate to="/" replace />} />

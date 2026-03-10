@@ -70,22 +70,61 @@ function parseCommand(text) {
     return { action: "help" };
   }
 
-  // --- Voice sale (add X to cart, payment cash/card, complete sale) + Urdu: "X sell kardo payment cash hai"
+  // --- Undo (undo, undo 1, undo 2, undo 3, pehla undo karo, dusra undo karo, last wala undo karo, undo kar do)
+  if (/^undo\s*$/i.test(lower) || /^undo\s+kar\s+do\s*$/i.test(lower) || /^last\s+(?:command\s+)?undo\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 1 };
+  }
+  const undoNum = lower.match(/^undo\s+(\d+)\s*$/) || lower.match(/^undo\s+kar\s+do\s+(\d+)\s*$/);
+  if (undoNum) {
+    const pos = parseInt(undoNum[1], 10);
+    if (pos >= 1 && pos <= 3) return { action: "undo", undoPosition: pos };
+  }
+  if (/^(?:pehla|pehla\s+wala)\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower) || /^first\s+undo\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 1 };
+  }
+  if (/^(?:dusra|doosra|second)\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 2 };
+  }
+  if (/^(?:teesra|teesra\s+wala|third)\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 3 };
+  }
+  if (/^last\s+wala\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 1 };
+  }
+
+  // --- Voice sale: English + Roman Urdu (sale kr do, bech do, de do, nikal do, dedena = sell)
   const voiceSaleAdd = lower.match(/add\s+(.+?)\s+(?:to\s+cart|,|and\s+payment|pay\s+with|payment\s+is)/i) ||
     lower.match(/(?:complete\s+sale|make\s+sale)\s+(?:for\s+)?(.+?)(?:\s*,\s*|\s+payment|\s+pay\s+with|$)/i) ||
     lower.match(/(?:a\s+)?(.+?)\s+sell\s+(?:kardo|karo)/i) ||
-    lower.match(/sell\s+(?:kardo\s+)?(?:a\s+)?(.+?)(?:\s+payment|\s+pay\s+with|$)/i);
-  if (voiceSaleAdd && (/cart|sale|sell|payment|pay\s+with|complete|kardo|karo/i.test(lower) || /add\s+\w+/.test(lower))) {
-    const payMatch = lower.match(/payment\s+is\s+(\w+)|pay\s+with\s+(\w+)|payment\s+(\w+)|payment\s+(\w+)\s+hai|(\w+)\s+hai\s+.*(?:payment|pay)/i);
-    const payVal = payMatch ? (payMatch[1] || payMatch[2] || payMatch[3] || payMatch[4] || payMatch[5] || "").toLowerCase() : "";
+    lower.match(/sell\s+(?:kardo\s+)?(?:a\s+)?(.+?)(?:\s+payment|\s+pay\s+with|\s+card|\s+cash|$)/i) ||
+    lower.match(/(.+?)\s+(?:sale\s+kr\s+do|bech\s+do|de\s+do|nikal\s+do|dedena)(?:\s+cash|\s+card|\s+payment|\s+par|$)/i) ||
+    lower.match(/(?:sale\s+kr\s+do|bech\s+do|de\s+do|nikal\s+do|dedena)\s+(.+?)(?:\s+cash|\s+card|\s+payment|\s+par|$)/i) ||
+    lower.match(/(.+?)\s+(?:cash\s+par|card\s+se|cash\s+rakh\s+lo|card\s+par)(?:\s+payment)?\s*$/i);
+  const saleKeywords = /cart|sale|sell|payment|pay\s+with|complete|kardo|karo|bech\s+do|de\s+do|nikal\s+do|dedena|cash\s+par|card\s+se/i;
+  if (voiceSaleAdd && (saleKeywords.test(lower) || /add\s+\w+/.test(lower))) {
+    const payMatch = lower.match(/payment\s+method\s+to\s+(\w+)|set\s+payment\s+method\s+to\s+(\w+)|payment\s+is\s+(\w+)|pay\s+with\s+(\w+)|payment\s+(\w+)\s+hai|(\w+)\s+hai\s+.*(?:payment|pay)/i)
+      || lower.match(/card\s+se|card\s+par|card\s+payment/i)
+      || lower.match(/cash\s+rakh\s+lo|cash\s+par|cash\s+payment|cash(?:\s|$)/i)
+      || lower.match(/online\s+payment|bank\s+transfer/i)
+      || lower.match(/payment\s+is\s+(\w+)|pay\s+with\s+(\w+)|payment\s+(\w+)/i);
+    let payVal = "";
+    if (payMatch) {
+      if (/card\s+se|card\s+par|card\s+payment/i.test(lower)) payVal = "card";
+      else if (/cash\s+rakh\s+lo|cash\s+par|cash\s+payment|cash(?:\s|$)/i.test(lower)) payVal = "cash";
+      else if (/online\s+payment|bank\s+transfer/i.test(lower)) payVal = "card";
+      else payVal = (payMatch[1] || payMatch[2] || payMatch[3] || payMatch[4] || payMatch[5] || payMatch[6] || "").toLowerCase();
+    }
     const paymentMethod = /card/i.test(payVal) ? "card" : "cash";
-    let productPart = (voiceSaleAdd[1] || "").replace(/\s*(?:and\s+)?payment\s+(?:is\s+)?\w+(\s+hai)?.*$/i, "").replace(/\s*(?:on\s+)?sale\s+ko\s+complete.*$/i, "").replace(/\s*,\s*complete.*$/i, "").replace(/\s+payment\s+.*$/i, "").trim();
+    let productPart = (voiceSaleAdd[1] || "").replace(/\s*(?:and\s+)?(?:set\s+)?payment\s+(?:method\s+to\s+)?(?:is\s+)?\w+(\s+hai)?.*$/i, "").replace(/\s*(?:on\s+)?sale\s+ko\s+complete.*$/i, "").replace(/\s*,\s*complete.*$/i, "").replace(/\s+payment\s+.*$/i, "").replace(/\s+(?:cash\s+rakh\s+lo|cash\s+par|card\s+se|card\s+par|online\s+payment|bank\s+transfer).*$/i, "").trim();
     productPart = productPart.replace(/^(a|the)\s+/i, "").trim();
-    const productNames = productPart.split(/\s+and\s+|\s*,\s*/).map((s) => s.replace(/^\d+\s+/, "").trim()).filter(Boolean);
+    productPart = productPart.replace(/\banday\b/gi, "eggs");
+    const segments = productPart.split(/\s+and\s+|\s*,\s*/).map((s) => s.trim()).filter(Boolean);
     const items = [];
-    for (const n of productNames) {
+    for (const n of segments) {
       const qtyMatch = n.match(/^(\d+)\s+(.+)$/);
-      items.push({ name: qtyMatch ? qtyMatch[2].trim() : n, quantity: qtyMatch ? parseInt(qtyMatch[1], 10) || 1 : 1 });
+      const name = qtyMatch ? qtyMatch[2].trim() : n;
+      const quantity = qtyMatch ? Math.max(1, parseInt(qtyMatch[1], 10) || 1) : 1;
+      if (name && !/^(set|payment|method|to|card|cash|rakh|lo|par|se)$/i.test(name)) items.push({ name, quantity });
     }
     if (items.length > 0) return { action: "voice_sale", items, paymentMethod };
   }
@@ -117,7 +156,13 @@ function parseCommand(text) {
     return { action: "add_supplier_help" };
   }
 
-  // --- Add customer (add customer <name> <phone> — extract ONLY the name, e.g. "asad" from "asad and its phone number is 3074405123")
+  // --- Add customer (add customer <name> <phone> — extract name and phone)
+  const addCustomerHisPhone = trimmed.match(/^add\s+customer\s+(.+?)\s+(?:his|her)\s+phone\s+(?:number\s+)?(?:is\s+)?(\d[\d\s\-]*)\s*$/i);
+  if (addCustomerHisPhone) {
+    const name = extractCustomerNameOnly(addCustomerHisPhone[1].trim());
+    const phone = addCustomerHisPhone[2].replace(/\D/g, "");
+    if (name && phone) return { action: "add_customer", name, phone };
+  }
   const addCustomerNatural = trimmed.match(/^add\s+customer\s+(.+?)\s+(?:and\s+(?:its?|his|her)|it'?s|,)\s*(?:phone\s*(?:number\s+)?(?:is\s+)?)?(\d[\d\s\-]*)\s*$/i);
   if (addCustomerNatural) {
     const name = addCustomerNatural[1].trim();
@@ -180,10 +225,35 @@ function parseCommand(text) {
     if (term) return { action: "search", term };
   }
 
-  // --- Delete/remove product (voice: "delete product milk", "remove the product milk")
+  // --- Delete/remove product (text/voice: "delete product milk", "paratha delete kr do", "inventory se coca cola hata do")
   const deleteMatch = trimmed.match(/^(delete|remove)\s+(?:the\s+)?product\s+(.+)$/i);
   if (deleteMatch) {
     const nameOrId = deleteMatch[2].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+  const productRemoveKrDo = trimmed.match(/product\s+(.+?)\s+(?:remove|delete)\s+(?:kr\s+do|krdo)/i);
+  if (productRemoveKrDo) {
+    const nameOrId = productRemoveKrDo[1].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+  const deleteProductFirst = trimmed.match(/^(.+?)\s+(?:delete|remove)\s+(?:product|kardo|karo|kr\s+do|krdo)/i);
+  if (deleteProductFirst) {
+    const nameOrId = deleteProductFirst[1].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+  const inventorySeHata = trimmed.match(/inventory\s+se\s+(.+?)\s+(?:hata\s+do|delete\s+kr\s+do|delete\s+krdo)/i);
+  if (inventorySeHata) {
+    const nameOrId = inventorySeHata[1].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+  const productHataDo = trimmed.match(/product\s+(.+?)\s+hata\s+do/i);
+  if (productHataDo) {
+    const nameOrId = productHataDo[1].trim();
+    if (nameOrId) return { action: "delete_product", nameOrId };
+  }
+  const productInventorySeHata = trimmed.match(/^(.+?)\s+inventory\s+se\s+hata\s+do/i);
+  if (productInventorySeHata) {
+    const nameOrId = productInventorySeHata[1].trim();
     if (nameOrId) return { action: "delete_product", nameOrId };
   }
 
@@ -237,6 +307,55 @@ function parseCommand(text) {
     const nameOrId = manageStock[1].trim();
     const stock = parseInt(manageStock[2], 10);
     if (nameOrId && !Number.isNaN(stock) && stock >= 0) return { action: "set_stock", nameOrId, stock };
+  }
+
+  // --- Add expense (text/voice: "add expense 7000 bijli ka bill", "mera bijli ka bill add kr do 7000", "7000 add kr do rent")
+  // Returns: action, amount, description (raw phrase – classifier maps to category)
+  const addExpenseAmountFirst = trimmed.match(/^(?:add\s+expense|expense\s+add)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i);
+  if (addExpenseAmountFirst) {
+    const amount = parseFloat(addExpenseAmountFirst[1].replace(",", "."));
+    const description = addExpenseAmountFirst[2].trim();
+    if (!Number.isNaN(amount) && amount >= 0 && description) return { action: "add_expense", amount, description };
+  }
+  const addExpenseCategoryFirst = trimmed.match(/^(?:add\s+expense|expense\s+add)\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s*$/i);
+  if (addExpenseCategoryFirst) {
+    const description = addExpenseCategoryFirst[1].trim();
+    const amount = parseFloat(addExpenseCategoryFirst[2].replace(",", "."));
+    if (description && !Number.isNaN(amount) && amount >= 0) return { action: "add_expense", amount, description };
+  }
+  const categoryAddKrDoAmount = trimmed.match(/^(.+?)\s+add\s+(?:kr\s+)?do\s+(\d+(?:[.,]\d+)?)\s*$/i) || trimmed.match(/^(.+?)\s+add\s+kardo\s+(\d+(?:[.,]\d+)?)\s*$/i);
+  if (categoryAddKrDoAmount) {
+    const part1 = categoryAddKrDoAmount[1].trim();
+    const amount = parseFloat(categoryAddKrDoAmount[2].replace(",", "."));
+    if (part1 && !Number.isNaN(amount) && amount >= 0 && /expense|bill|rent|salary|utilities|bijli|gas|maintenance|supplies|kharcha|lagan|ka\s+bill/i.test(part1)) {
+      const description = part1.replace(/^(?:acha\s+yar\s+|oy\s+|yar\s+|mera\s+)/i, "").trim();
+      if (description) return { action: "add_expense", amount, description };
+    }
+  }
+  const amountAddKrDoCategory = trimmed.match(/^(\d+(?:[.,]\d+)?)\s+add\s+(?:kr\s+)?do\s+(.+)$/i) || trimmed.match(/^(\d+(?:[.,]\d+)?)\s+add\s+kardo\s+(.+)$/i);
+  if (amountAddKrDoCategory) {
+    const amount = parseFloat(amountAddKrDoCategory[1].replace(",", "."));
+    const description = amountAddKrDoCategory[2].trim();
+    if (!Number.isNaN(amount) && amount >= 0 && description) return { action: "add_expense", amount, description };
+  }
+  const categoryAmountAdd = trimmed.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s+add\s+(?:(?:kr\s+)?do|kardo)\s*$/i);
+  if (categoryAmountAdd) {
+    const part1 = categoryAmountAdd[1].trim();
+    const amount = parseFloat(categoryAmountAdd[2].replace(",", "."));
+    if (part1 && !Number.isNaN(amount) && amount >= 0 && /expense|bill|rent|salary|utilities|bijli|gas|maintenance|supplies|kharcha|lagan|ka\s+bill/i.test(part1)) {
+      const description = part1.replace(/^(?:acha\s+yar\s+|oy\s+|yar\s+|mera\s+)/i, "").trim();
+      if (description) return { action: "add_expense", amount, description };
+    }
+  }
+  // Amount first, description: "7000 mere bijli ka bill", "7000 bijli bill add kr do"
+  const amountThenDescription = trimmed.match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/i);
+  if (amountThenDescription) {
+    const amount = parseFloat(amountThenDescription[1].replace(",", "."));
+    let part2 = amountThenDescription[2].trim().replace(/\s+add\s+(?:kr\s+)?do\s*$/i, "").replace(/\s+add\s+kardo\s*$/i, "").trim();
+    if (!Number.isNaN(amount) && amount >= 0 && part2 && /expense|bill|rent|salary|utilities|bijli|gas|kiraya|maintenance|supplies|kharcha|lagan|ka\s+bill|tankhwa|mazdoor/i.test(part2)) {
+      const description = part2.replace(/^(?:acha\s+yar\s+|oy\s+|yar\s+|mera\s+|mere\s+)/i, "").trim();
+      if (description) return { action: "add_expense", amount, description };
+    }
   }
 
   // --- Add product (text: "add product milk 50", "add product lazania 100 50" with optional threshold)

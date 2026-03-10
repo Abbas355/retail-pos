@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   name_ur TEXT,
+  barcode TEXT UNIQUE,
   price REAL NOT NULL,
   cost REAL NOT NULL DEFAULT 0,
   stock INTEGER NOT NULL DEFAULT 0,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS products (
   deleted_by TEXT,
   deleted_by_role TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
 
 CREATE TABLE IF NOT EXISTS customers (
   id TEXT PRIMARY KEY,
@@ -96,4 +98,14 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   cost REAL NOT NULL,
   FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE,
   FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS expenses (
+  id TEXT PRIMARY KEY,
+  amount REAL NOT NULL,
+  category TEXT NOT NULL,
+  description TEXT,
+  date TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now')),
+  created_by TEXT
 );

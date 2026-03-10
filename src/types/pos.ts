@@ -3,6 +3,8 @@ export interface Product {
   name: string;
   /** Urdu name for bilingual display (e.g. Sales tab) */
   nameUr?: string;
+  /** Unique barcode for scanning (add product / sell) */
+  barcode?: string;
   price: number;
   cost: number;
   stock: number;
@@ -52,4 +54,13 @@ export interface Purchase {
   items: { productId: string; productName: string; quantity: number; cost: number }[];
   total: number;
   date: string;
+}
+
+export interface Expense {
+  id: string;
+  amount: number;
+  category: string;
+  description?: string;
+  date: string;
+  createdBy?: string;
 }

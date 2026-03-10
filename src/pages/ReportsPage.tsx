@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getLocalDateString } from "@/lib/utils";
+import { getLocalDateString, getDatePartFromApi } from "@/lib/utils";
 import type { Sale } from "@/types/pos";
 import {
   BarChart,
@@ -125,7 +125,8 @@ const ReportsPage = () => {
 
   const filteredSales = useMemo(() => {
     return sales.filter((s) => {
-      const dateStr = s.date ? getLocalDateString(s.date) : "";
+      const dateStr = getDatePartFromApi(s.date);
+      if (!dateStr) return false;
       if (dateStr < dateRange.from || dateStr > dateRange.to) return false;
       if (paymentFilter !== "all" && s.paymentMethod !== paymentFilter) return false;
       if (cashierFilter !== "all" && s.cashier !== cashierFilter) return false;
@@ -136,7 +137,7 @@ const ReportsPage = () => {
   const barChartData = useMemo(() => {
     const byDate: Record<string, { date: string; revenue: number; count: number }> = {};
     filteredSales.forEach((s) => {
-      const dateStr = s.date ? getLocalDateString(s.date) : "";
+      const dateStr = getDatePartFromApi(s.date);
       if (!dateStr) return;
       if (!byDate[dateStr]) byDate[dateStr] = { date: dateStr, revenue: 0, count: 0 };
       byDate[dateStr].revenue += Number(s.total ?? 0);

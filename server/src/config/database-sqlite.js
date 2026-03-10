@@ -49,6 +49,34 @@ function ensureSoftDeleteColumns() {
 }
 ensureSoftDeleteColumns();
 
+/** Ensure expenses table exists (for DBs created before expenses feature). */
+function ensureExpensesTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS expenses (
+    id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    category TEXT NOT NULL,
+    description TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    created_by TEXT
+  )`;
+  try { db.exec(sql); } catch (e) { if (!/already exists/i.test(e.message)) throw e; }
+}
+ensureExpensesTable();
+
+/** Ensure products.barcode column exists (for DBs created before barcode feature). */
+function ensureProductsBarcodeColumn() {
+  try {
+    const info = db.prepare("PRAGMA table_info(products)").all();
+    const hasBarcode = info.some((col) => col.name === "barcode");
+    if (!hasBarcode) {
+      db.exec("ALTER TABLE products ADD COLUMN barcode TEXT UNIQUE");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)");
+    }
+  } catch (e) { if (!/duplicate column|already exists/i.test(e.message)) throw e; }
+}
+ensureProductsBarcodeColumn();
+
 // Optional: make SQL slightly MySQL-friendly (e.g. NOW() in routes)
 function normalizeSql(sql) {
   return sql.replace(/\bNOW\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");

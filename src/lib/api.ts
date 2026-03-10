@@ -43,9 +43,10 @@ export async function login(username: string, password: string) {
 export const productsApi = {
   list: () => fetchApi<any[]>("/products"),
   get: (id: string) => fetchApi(`/products/${id}`),
-  create: (data: { name: string; nameUr?: string; price: number; cost?: number; stock?: number; category?: string; lowStockThreshold?: number }) =>
+  getByBarcode: (barcode: string) => fetchApi<any>(`/products/by-barcode/${encodeURIComponent(barcode)}`),
+  create: (data: { name: string; nameUr?: string; barcode?: string; price: number; cost?: number; stock?: number; category?: string; lowStockThreshold?: number }) =>
     fetchApi("/products", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: Partial<{ name: string; nameUr: string | null; price: number; cost: number; stock: number; category: string; lowStockThreshold: number }>) =>
+  update: (id: string, data: Partial<{ name: string; nameUr: string | null; barcode?: string | null; price: number; cost: number; stock: number; category: string; lowStockThreshold: number }>) =>
     fetchApi(`/products/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   delete: (id: string, options?: { deletedBy?: string; deletedByRole?: string }) => {
     const deletedBy = options?.deletedBy?.trim();
@@ -113,6 +114,16 @@ export const purchasesApi = {
     items: { productId: string; productName: string; quantity: number; cost: number }[];
     total: number;
   }) => fetchApi("/purchases", { method: "POST", body: JSON.stringify(data) }),
+};
+
+export const expensesApi = {
+  list: (params?: { from?: string; to?: string; category?: string }) => {
+    const q = new URLSearchParams(params as Record<string, string>).toString();
+    return fetchApi<import("@/types/pos").Expense[]>(`/expenses${q ? `?${q}` : ""}`);
+  },
+  create: (data: { amount: number; category: string; description?: string; date?: string }) =>
+    fetchApi<import("@/types/pos").Expense>("/expenses", { method: "POST", body: JSON.stringify(data) }),
+  delete: (id: string) => fetchApi(`/expenses/${id}`, { method: "DELETE" }),
 };
 
 export interface ApiUser {

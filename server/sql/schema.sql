@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS products (
   id VARCHAR(36) PRIMARY KEY,
   name VARCHAR(200) NOT NULL,
   name_ur VARCHAR(200) NULL,
+  barcode VARCHAR(64) NULL UNIQUE,
   price DECIMAL(10, 2) NOT NULL,
   cost DECIMAL(10, 2) NOT NULL DEFAULT 0,
   stock INT NOT NULL DEFAULT 0,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS products (
   deleted_by VARCHAR(100) NULL,
   deleted_by_role VARCHAR(20) NULL
 );
+CREATE INDEX idx_products_barcode ON products(barcode);
 
 CREATE TABLE IF NOT EXISTS customers (
   id VARCHAR(36) PRIMARY KEY,
@@ -95,4 +97,14 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   cost DECIMAL(10, 2) NOT NULL,
   FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE,
   FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS expenses (
+  id VARCHAR(36) PRIMARY KEY,
+  amount DECIMAL(10, 2) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  description VARCHAR(500) NULL,
+  date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by VARCHAR(100) NULL
 );

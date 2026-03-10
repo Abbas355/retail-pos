@@ -4,6 +4,7 @@
     "sales": "Sales",
     "inventory": "Inventory",
     "purchases": "Purchases",
+    "expenses": "Expenses",
     "customers": "Customers",
     "suppliers": "Suppliers",
     "reports": "Reports",

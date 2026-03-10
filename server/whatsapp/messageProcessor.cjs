@@ -9,10 +9,71 @@ require("dotenv").config({ path: path.join(process.cwd(), ".env") });
 const { parseCommand } = require("./commandParser.cjs");
 const { transcribeVoice } = require("./voiceToText.cjs");
 const { getIntentFromMessage, sanitizeProductName, sanitizeCustomerName, sanitizeSupplierName } = require("./intentFromMessage.cjs");
+const { normalizeProductNameForDb, findClosestProduct } = require("./productNameMap.cjs");
+const { classifyExpenseCategory } = require("./expenseCategoryClassifier.cjs");
 
 const API_BASE = process.env.POS_API_URL || `http://localhost:${process.env.PORT || 3000}`;
 
 const processedIds = new Set();
+/** Pending voice-sale confirmations: from (phone) -> { items, paymentMethod, customer, cashier } */
+const pendingVoiceSales = new Map();
+/** Pending delete confirmations: from -> { productId, productName, at } */
+const pendingDeletes = new Map();
+/** Action history for undo: from -> [{ action, label, payload }], max 3 per user */
+const actionHistory = new Map();
+const MAX_ACTION_HISTORY = 3;
+const PENDING_EXPIRY_MS = 5 * 60 * 1000;
+
+/** Normalize sender key so history is consistent (WhatsApp can use different formats for same user). */
+function actionHistoryKey(from) {
+  const s = String(from || "").trim();
+  if (!s) return s;
+  const num = s.replace(/\D/g, "");
+  return num ? `${num}` : s;
+}
+
+function pushActionHistory(from, entry) {
+  const key = actionHistoryKey(from);
+  if (!key) return;
+  let list = actionHistory.get(key) || [];
+  list = [entry, ...list].slice(0, MAX_ACTION_HISTORY);
+  actionHistory.set(key, list);
+}
+
+function getActionHistory(from) {
+  return actionHistory.get(actionHistoryKey(from)) || [];
+}
+
+function removeActionAt(from, index) {
+  const key = actionHistoryKey(from);
+  const list = actionHistory.get(key) || [];
+  if (index < 0 || index >= list.length) return null;
+  const removed = list[index];
+  const next = list.filter((_, i) => i !== index);
+  if (next.length === 0) actionHistory.delete(key);
+  else actionHistory.set(key, next);
+  return removed;
+}
+
+function getPendingSale(from) {
+  const entry = pendingVoiceSales.get(from);
+  if (!entry) return null;
+  if (Date.now() - (entry.at || 0) > PENDING_EXPIRY_MS) {
+    pendingVoiceSales.delete(from);
+    return null;
+  }
+  return entry;
+}
+
+function getPendingDelete(from) {
+  const entry = pendingDeletes.get(from);
+  if (!entry) return null;
+  if (Date.now() - (entry.at || 0) > PENDING_EXPIRY_MS) {
+    pendingDeletes.delete(from);
+    return null;
+  }
+  return entry;
+}
 const MAX_PROCESSED = 200;
 
 function normalizePhone(phone) {
@@ -89,6 +150,105 @@ async function processIncomingMessage(msg, client) {
     }
   }
 
+  const bodyUpper = body.trim().toUpperCase();
+  if (bodyUpper === "YES" || bodyUpper === "NO") {
+    const pending = getPendingSale(msg.from);
+    if (pending) {
+      if (bodyUpper === "YES") {
+        pendingVoiceSales.delete(msg.from);
+        try {
+          const resProducts = await fetch(`${API_BASE}/api/products`);
+          const products = await resProducts.json().catch(() => []);
+          if (!resProducts.ok || !Array.isArray(products)) {
+            await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
+            return;
+          }
+          const saleItems = [];
+          const notFound = [];
+          for (const it of pending.items) {
+            const qty = Math.max(1, it.quantity || 1);
+            const closest = findClosestProduct(it.name || "", products);
+            const product = closest ? closest.product : null;
+            if (product && product.stock >= qty) {
+              saleItems.push({
+                product: { id: product.id, name: product.name, price: Number(product.price) },
+                quantity: qty,
+              });
+            } else if (product && product.stock < qty) {
+              notFound.push(`${product.name} (only ${product.stock} in stock)`);
+            } else {
+              notFound.push(it.name || "?");
+            }
+          }
+          if (saleItems.length === 0) {
+            await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`);
+            return;
+          }
+          const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+          const resSale = await fetch(`${API_BASE}/api/sales`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              items: saleItems,
+              total,
+              paymentMethod: pending.paymentMethod || "cash",
+              cashier: pending.cashier || "WhatsApp User",
+              customerId: null,
+            }),
+          });
+          const saleData = await resSale.json().catch(() => ({}));
+          if (resSale.ok) {
+            const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+            pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+            const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
+            await client.sendMessage(msg.from, `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${pending.paymentMethod || "cash"}${extra}`);
+            console.log("  → Voice sale (confirmed):", saleItems.length, "item(s), Rs", total);
+          } else {
+            await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
+          }
+        } catch (err) {
+          console.error("Voice sale (YES) error:", err);
+          await client.sendMessage(msg.from, "Error completing sale. Please try again.");
+        }
+      } else {
+        pendingVoiceSales.delete(msg.from);
+        await client.sendMessage(msg.from, "Request cancelled. Please send the correct instruction (e.g. *Sell 2 Milk, payment cash*).");
+        console.log("  → Voice sale: user said NO, cancelled");
+      }
+      return;
+    }
+    const pendingDel = getPendingDelete(msg.from);
+    if (pendingDel) {
+      if (bodyUpper === "YES") {
+        pendingDeletes.delete(msg.from);
+        try {
+          const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(pendingDel.productId)}?deletedBy=${encodeURIComponent(from || "WhatsApp User")}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+          });
+          if (res.status === 204) {
+            await client.sendMessage(msg.from, `The product *${pendingDel.productName}* has been deleted from the inventory.`);
+            console.log("  → Delete (confirmed):", pendingDel.productName);
+          } else if (res.status === 403) {
+            await client.sendMessage(msg.from, "This product cannot be deleted because it has sales history in the system.");
+            console.log("  → Delete blocked (has history):", pendingDel.productName);
+          } else {
+            const data = await res.json().catch(() => ({}));
+            await client.sendMessage(msg.from, data.error || `Error: ${res.status}`);
+          }
+        } catch (err) {
+          console.error("Delete (YES) error:", err);
+          await client.sendMessage(msg.from, "Error deleting product. Please try again.");
+        }
+      } else {
+        pendingDeletes.delete(msg.from);
+        await client.sendMessage(msg.from, "Request cancelled. No product was deleted.");
+        console.log("  → Delete: user said NO, cancelled");
+      }
+      return;
+    }
+  }
+
   let command = parseCommand(body);
   if (command.action === "unknown") {
     const intentCommand = await getIntentFromMessage(body);
@@ -107,7 +267,49 @@ async function processIncomingMessage(msg, client) {
   let reply;
 
   try {
-    if (command.action === "add_product") {
+    if (command.action === "undo") {
+      const history = getActionHistory(msg.from);
+      const position = Math.min(Math.max(1, Number(command.undoPosition) || 1), 3);
+      const index = position - 1;
+      if (index >= history.length) {
+        reply = "No command available to undo.";
+        console.log("  → Undo: no action at position", position, "history:", history.length);
+      } else {
+        const entry = removeActionAt(msg.from, index);
+        if (!entry) {
+          reply = "No command available to undo.";
+        } else {
+          let ok = false;
+          try {
+            if (entry.action === "add_expense" && entry.payload?.expenseId) {
+              const res = await fetch(`${API_BASE}/api/expenses/${encodeURIComponent(entry.payload.expenseId)}`, { method: "DELETE" });
+              ok = res.status === 204;
+            } else if (entry.action === "add_product" && entry.payload?.productId) {
+              const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(entry.payload.productId)}`, { method: "DELETE" });
+              ok = res.ok || res.status === 204;
+            } else if (entry.action === "add_customer" && entry.payload?.customerId) {
+              const res = await fetch(`${API_BASE}/api/customers/${encodeURIComponent(entry.payload.customerId)}?deletedBy=${encodeURIComponent(from || "WhatsApp")}`, { method: "DELETE" });
+              ok = res.ok || res.status === 204;
+            } else if (entry.action === "add_supplier" && entry.payload?.supplierId) {
+              const res = await fetch(`${API_BASE}/api/suppliers/${encodeURIComponent(entry.payload.supplierId)}?deletedBy=${encodeURIComponent(from || "WhatsApp")}`, { method: "DELETE" });
+              ok = res.ok || res.status === 204;
+            } else if (entry.action === "voice_sale" && entry.payload?.saleId) {
+              const res = await fetch(`${API_BASE}/api/sales/${encodeURIComponent(entry.payload.saleId)}`, { method: "DELETE" });
+              ok = res.status === 204;
+            }
+          } catch (err) {
+            console.error("Undo reverse error:", err);
+          }
+          if (ok) {
+            reply = `The command "${entry.label}" has been successfully undone.`;
+            console.log("  → Undo: reversed", entry.action, entry.label);
+          } else {
+            reply = `Could not undo the command "${entry.label}". It may no longer be reversible.`;
+            console.log("  → Undo: failed to reverse", entry.action);
+          }
+        }
+      }
+    } else if (command.action === "add_product") {
       const productName = sanitizeProductName(command.name) || command.name;
       const res = await fetch(`${API_BASE}/api/products`, {
         method: "POST",
@@ -123,6 +325,7 @@ async function processIncomingMessage(msg, client) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        pushActionHistory(msg.from, { action: "add_product", label: `add product ${data.name}`, payload: { productId: data.id } });
         reply = `Product added: ${data.name} — $${Number(data.price).toFixed(2)}`;
         console.log(`  → Product added: ${data.name} ($${Number(data.price).toFixed(2)})`);
       } else {
@@ -183,6 +386,7 @@ async function processIncomingMessage(msg, client) {
       const looksLikeId = /^[a-z0-9]+-\d+$/i.test(nameOrId);
       let productId = null;
       let productName = null;
+      let askConfirmation = false;
 
       if (looksLikeId) {
         productId = nameOrId;
@@ -190,6 +394,9 @@ async function processIncomingMessage(msg, client) {
         if (resGet.ok) {
           const p = await resGet.json().catch(() => ({}));
           productName = p.name;
+        } else {
+          reply = `Product not found: "${nameOrId}".`;
+          console.log(`  → Delete product: not found (ID) "${nameOrId}"`);
         }
       } else {
         const resList = await fetch(`${API_BASE}/api/products`);
@@ -198,41 +405,41 @@ async function processIncomingMessage(msg, client) {
           reply = "Could not fetch products. Is the POS server running?";
           console.log("  → Error: could not fetch products");
         } else {
-          let term = nameOrId.toLowerCase();
-          let matches = products.filter((p) => (p.name || "").toLowerCase().includes(term));
-          if (matches.length === 0 && /^.+\s+\d+$/.test(nameOrId.trim())) {
-            const nameOnly = nameOrId.replace(/\s+\d+$/, "").trim();
-            if (nameOnly) {
-              term = nameOnly.toLowerCase();
-              matches = products.filter((p) => (p.name || "").toLowerCase().includes(term));
-            }
-          }
-          if (matches.length === 0) {
+          const closest = findClosestProduct(nameOrId, products);
+          if (!closest) {
             reply = `Product not found: "${nameOrId}".`;
             console.log(`  → Delete product: not found "${nameOrId}"`);
-          } else if (matches.length > 1) {
-            reply = `Multiple products match. Use ID:\n${matches.slice(0, 5).map((p) => `• delete product ${p.id}`).join("\n")}`;
-            console.log(`  → Delete product: ${matches.length} matches for "${nameOrId}"`);
+          } else if (closest.confidence === "exact") {
+            productId = closest.product.id;
+            productName = closest.product.name;
           } else {
-            productId = matches[0].id;
-            productName = matches[0].name;
+            productId = closest.product.id;
+            productName = closest.product.name;
+            askConfirmation = true;
           }
         }
       }
 
-      if (productId && !reply) {
-        const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(productId)}`, {
+      if (askConfirmation && productId && productName) {
+        pendingDeletes.set(msg.from, { productId, productName, at: Date.now() });
+        reply = `I found a similar product in inventory: *${productName}*.\nDid you mean to delete *${productName}*?\nReply YES to confirm or NO to cancel.`;
+        console.log(`  → Delete: asking confirmation for "${productName}"`);
+      } else if (productId && !reply) {
+        const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(productId)}?deletedBy=${encodeURIComponent(from || "WhatsApp User")}`, {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
         });
         if (res.status === 204) {
           const displayName = productName || productId;
-          reply = `Product deleted: ${displayName}`;
+          reply = `The product *${displayName}* has been deleted from the inventory.`;
           console.log(`  → Product deleted: ${displayName}`);
+        } else if (res.status === 403) {
+          reply = "This product cannot be deleted because it has sales history in the system.";
+          console.log(`  → Delete product (has history): ${productName || productId}`);
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.error || `Error: ${res.status}`;
-          console.log(`  → Error: ${reply}`);
+          console.log(`  → Delete product error: ${reply}`);
         }
       }
     } else if (command.action === "set_threshold") {
@@ -406,6 +613,38 @@ async function processIncomingMessage(msg, client) {
         "The supplier will appear in the Suppliers tab in your POS.",
       ].join("\n");
       console.log("  → Add supplier help");
+    } else if (command.action === "add_expense") {
+      const amount = Number(command.amount);
+      const rawDescription = (command.description || "").trim();
+      if (Number.isNaN(amount) || amount < 0) {
+        reply = "Please send a valid amount. Example: bijli ka bill add kr do 7000";
+      } else if (!rawDescription) {
+        reply = "Please mention the expense (e.g. rent, bijli ka bill). Example: add expense 7000 bijli ka bill";
+      } else {
+        const { category, description } = classifyExpenseCategory(rawDescription);
+        try {
+          const res = await fetch(`${API_BASE}/api/expenses`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount,
+              category,
+              description: description.slice(0, 500),
+            }),
+          });
+          const expData = await res.json().catch(() => ({}));
+          if (res.ok) {
+            pushActionHistory(msg.from, { action: "add_expense", label: `add expense ${description}`, payload: { expenseId: expData.id } });
+            reply = `Expense recorded: *${description}* (${category}) – ${amount.toLocaleString()} added.`;
+            console.log("  → Expense added:", { amount, category, description });
+          } else {
+            reply = expData.error || `Error: ${res.status}`;
+          }
+        } catch (err) {
+          console.error("Add expense error:", err);
+          reply = "Could not add expense. Is the POS server running?";
+        }
+      }
     } else if (command.action === "add_customer") {
       let name = sanitizeCustomerName((command.name || "").trim());
       if (!name || /phone|number|add\s+customer|\d{4,}/i.test(name) || name.length > 40) {
@@ -425,6 +664,7 @@ async function processIncomingMessage(msg, client) {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          pushActionHistory(msg.from, { action: "add_customer", label: `add customer ${data.name}`, payload: { customerId: data.id } });
           reply = `Customer added: ${data.name} — ${data.phone || phone}`;
           console.log(`  → Customer added: ${data.name} (${data.phone || phone})`);
         } else {
@@ -450,6 +690,7 @@ async function processIncomingMessage(msg, client) {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          pushActionHistory(msg.from, { action: "add_supplier", label: `add supplier ${data.name}`, payload: { supplierId: data.id } });
           const parts = [data.name];
           if (data.phone) parts.push(data.phone);
           if (data.email) parts.push(data.email);
@@ -502,57 +743,112 @@ async function processIncomingMessage(msg, client) {
       const items = command.items || [];
       const paymentMethod = command.paymentMethod === "card" ? "card" : "cash";
       const cashier = from || "WhatsApp User";
+      const needsConfirmation = command.saleAction === "ask_confirmation" || command.saleConfidence === "low";
 
-      const resProducts = await fetch(`${API_BASE}/api/products`);
-      const products = await resProducts.json().catch(() => []);
-      if (!resProducts.ok || !Array.isArray(products)) {
-        reply = "Could not fetch products. Is the POS server running?";
-        console.log("  → Voice sale: products fetch failed");
+      if (needsConfirmation && items.length > 0) {
+        const first = items[0];
+        const productLabel = (first.name || "unknown").toLowerCase() === "unknown" ? "?" : first.name;
+        const qtyLabel = (first.quantity == null || first.quantity === 0) ? "?" : first.quantity;
+        pendingVoiceSales.set(msg.from, {
+          items: [...items],
+          paymentMethod,
+          customer: command.customer || null,
+          cashier,
+          at: Date.now(),
+        });
+        reply = "I may have misunderstood your request.\n\nThis is what I understood:\n*Sell " + qtyLabel + " " + productLabel + "*\n\nIs this correct? Reply *YES* to confirm or *NO* to cancel.";
+        console.log("  → Voice sale: ask_confirmation", { product: productLabel, quantity: qtyLabel });
+      } else if (items.length === 0 || items.some((it) => !it.name || (it.name || "").toLowerCase() === "unknown")) {
+        reply = "I couldn't understand the product or quantity. Please say clearly, e.g. *Sell 2 Milk, payment cash*.";
+        console.log("  → Voice sale: missing product/quantity");
       } else {
-        const saleItems = [];
-        const notFound = [];
-        for (const it of items) {
-          const qty = Math.max(1, it.quantity || 1);
-          const term = (it.name || "").toLowerCase().trim();
-          const matches = products.filter((p) => (p.name || "").toLowerCase().includes(term) || term.includes((p.name || "").toLowerCase()));
-          const product = matches.length >= 1 ? (matches.find((p) => (p.name || "").toLowerCase() === term) || matches[0]) : null;
-          if (product && product.stock >= qty) {
-            saleItems.push({
-              product: { id: product.id, name: product.name, price: Number(product.price) },
-              quantity: qty,
-            });
-          } else if (product && product.stock < qty) {
-            notFound.push(`${product.name} (only ${product.stock} in stock, asked ${qty})`);
-          } else {
-            notFound.push(term || "?");
-          }
-        }
-        if (notFound.length > 0 && saleItems.length === 0) {
-          reply = `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`;
-          console.log("  → Voice sale: no matches", notFound);
-        } else if (saleItems.length === 0) {
-          reply = "No valid items for sale. Specify product names (e.g. add detergent to cart, payment cash).";
+        const resProducts = await fetch(`${API_BASE}/api/products`);
+        const products = await resProducts.json().catch(() => []);
+        if (!resProducts.ok || !Array.isArray(products)) {
+          reply = "Could not fetch products. Is the POS server running?";
+          console.log("  → Voice sale: products fetch failed");
         } else {
-          const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
-          const resSale = await fetch(`${API_BASE}/api/sales`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              items: saleItems,
-              total,
+          const saleItems = [];
+          const notFound = [];
+          const similarForConfirmation = [];
+          for (const it of items) {
+            const qty = Math.max(1, it.quantity || 1);
+            const closest = findClosestProduct(it.name || "", products);
+            if (!closest) {
+              notFound.push(it.name || "?");
+              continue;
+            }
+            const { product, confidence } = closest;
+            if (product.stock < qty) {
+              notFound.push(`${product.name} (only ${product.stock} in stock, asked ${qty})`);
+              continue;
+            }
+            if (confidence === "exact") {
+              saleItems.push({
+                product: { id: product.id, name: product.name, price: Number(product.price) },
+                quantity: qty,
+              });
+            } else {
+              similarForConfirmation.push({
+                product: { id: product.id, name: product.name, price: Number(product.price) },
+                quantity: qty,
+                spoken: it.name,
+              });
+            }
+          }
+          if (similarForConfirmation.length > 0 && saleItems.length === 0) {
+            const first = similarForConfirmation[0];
+            const parts = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+            pendingVoiceSales.set(msg.from, {
+              items: similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity })),
               paymentMethod,
+              customer: null,
               cashier,
-              customerId: null,
-            }),
-          });
-          const saleData = await resSale.json().catch(() => ({}));
-          if (resSale.ok) {
-            const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
-            reply = `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${paymentMethod}${extra}`;
-            console.log(`  → Voice sale: ${saleItems.length} item(s), Rs ${total}, ${paymentMethod}`);
+              at: Date.now(),
+            });
+            reply = `I found a similar product in inventory: *${first.product.name}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
+            console.log("  → Voice sale: similar product, ask confirmation", first.product.name);
+          } else if (notFound.length > 0 && saleItems.length === 0) {
+            reply = `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`;
+            console.log("  → Voice sale: no matches", notFound);
+          } else if (saleItems.length === 0) {
+            reply = "No valid items for sale. Specify product names (e.g. Sell 2 detergent, payment cash).";
+          } else if (similarForConfirmation.length > 0) {
+            const pendingItems = [...saleItems, ...similarForConfirmation.map((s) => ({ product: s.product, quantity: s.quantity }))];
+            const parts = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+            pendingVoiceSales.set(msg.from, {
+              items: pendingItems.map((i) => ({ name: i.product.name, quantity: i.quantity })),
+              paymentMethod,
+              customer: null,
+              cashier,
+              at: Date.now(),
+            });
+            reply = `I found a similar product in inventory: *${similarForConfirmation[0].product.name}*.\n\nDid you mean to sell ${parts}${saleItems.length > 0 ? " (and " + saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ") + ")" : ""}?\n\nReply *YES* to confirm or *NO* to cancel.`;
+            console.log("  → Voice sale: partial similar, ask confirmation");
           } else {
-            reply = saleData.error || `Sale failed (${resSale.status}).`;
-            console.log("  → Voice sale error:", reply);
+            const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+            const resSale = await fetch(`${API_BASE}/api/sales`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                items: saleItems,
+                total,
+                paymentMethod,
+                cashier,
+                customerId: null,
+              }),
+            });
+            const saleData = await resSale.json().catch(() => ({}));
+            if (resSale.ok) {
+              const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+              pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+              const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
+              reply = `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${paymentMethod}${extra}`;
+              console.log(`  → Voice sale: ${saleItems.length} item(s), Rs ${total}, ${paymentMethod}`);
+            } else {
+              reply = saleData.error || `Sale failed (${resSale.status}).`;
+              console.log("  → Voice sale error:", reply);
+            }
           }
         }
       }
@@ -577,14 +873,25 @@ async function processIncomingMessage(msg, client) {
         "• add supplier <name> [phone] [email]",
         "• Type *how to add supplier* for details",
         "",
+        "*Expenses:*",
+        "• *<category> add kr do <amount>* – e.g. bijli ka bill add kr do 7000",
+        "• *<amount> add kr do <category>* – e.g. 7000 add kr do rent",
+        "• *add expense <amount> <category>* – e.g. add expense 5000 utilities",
+        "• Voice: *acha yar mera bijli ka bill add kr do 7000*",
+        "",
         "*Sales:*",
         "• *give me today's sales* – sales report (orders, revenue, top product, payment breakdown)",
         "• *show sales report today* – same as above",
         "",
-        "*Voice/Text Sale (complete purchase):*",
-        "• *add detergent to cart, payment is card* – add product, pay with card/cash",
-        "• *add milk and bread, pay with cash, complete the sale*",
-        "• *add 2 detergent and 1 milk, payment card* – specify quantity",
+        "*Voice/Text Sale:*",
+        "• *Sell 2 Milk, payment cash* – clear instruction runs immediately",
+        "• *Sell 1 detergent, payment card* – or say product name and quantity",
+        "• If unclear, bot will ask: Reply *YES* to confirm or *NO* to cancel",
+        "",
+        "*Undo:*",
+        "• *undo* or *undo 1* – undo most recent command",
+        "• *undo 2* – undo 2nd last, *undo 3* – undo 3rd last",
+        "• *pehla undo karo*, *dusra undo karo*, *undo kar do*",
         "",
         "• help – show this message",
         "",

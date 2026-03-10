@@ -2,7 +2,7 @@ import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/AuthContext";
 import {
-  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings
+  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings, Wallet
 } from "lucide-react";
 
 const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; roles: string[] }[] = [
@@ -10,6 +10,7 @@ const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; rol
   { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart, roles: ["admin", "manager", "cashier"] },
   { to: "/inventory", labelKey: "nav.inventory", icon: Package, roles: ["admin", "manager", "cashier"] },
   { to: "/purchases", labelKey: "nav.purchases", icon: TruckIcon, roles: ["admin", "manager"] },
+  { to: "/expenses", labelKey: "nav.expenses", icon: Wallet, roles: ["admin", "manager"] },
   { to: "/customers", labelKey: "nav.customers", icon: Users, roles: ["admin", "manager", "cashier"] },
   { to: "/suppliers", labelKey: "nav.suppliers", icon: Building2, roles: ["admin", "manager"] },
   { to: "/reports", labelKey: "nav.reports", icon: BarChart3, roles: ["admin", "manager"] },
