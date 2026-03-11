@@ -5,6 +5,38 @@
 
 const ADD_NAME_JUNK = /\b(it'?s|its|price|should|be|threshold|and|is|cost)\b/i;
 
+/** Roman Urdu / Hindi number words → digit (for quantity in "teen eggs", "do bread") */
+const ROMAN_URDU_NUMBERS = {
+  ek: 1, aik: 1, one: 1,
+  do: 2, doh: 2, two: 2,
+  teen: 3, tin: 3, three: 3,
+  char: 4, chaar: 4, four: 4,
+  paanch: 5, panch: 5, five: 5,
+  chhe: 6, che: 6, chhay: 6, six: 6,
+  saat: 7, sat: 7, seven: 7,
+  aath: 8, ath: 8, eight: 8,
+  nau: 9, no: 9, nine: 9,
+  das: 10, dus: 10, ten: 10,
+  gyarah: 11, barah: 12, terah: 13, chaudah: 14, pandrah: 15,
+};
+function parseQuantityFromSegment(segment) {
+  if (!segment || typeof segment !== "string") return { quantity: 1, name: segment || "" };
+  const s = segment.trim();
+  const digitMatch = s.match(/^(\d+)\s+(.+)$/);
+  if (digitMatch) {
+    const qty = Math.max(1, parseInt(digitMatch[1], 10) || 1);
+    return { quantity: qty, name: digitMatch[2].trim() };
+  }
+  const word = s.split(/\s+/)[0] || "";
+  const lower = word.toLowerCase();
+  const num = ROMAN_URDU_NUMBERS[lower];
+  if (num != null) {
+    const rest = s.slice(word.length).trim();
+    return { quantity: Math.max(1, num), name: rest || word };
+  }
+  return { quantity: 1, name: s };
+}
+
 function extractCustomerNameOnly(raw) {
   if (!raw || typeof raw !== "string") return raw;
   const s = raw.trim();
@@ -70,14 +102,14 @@ function parseCommand(text) {
     return { action: "help" };
   }
 
-  // --- Undo (undo, undo 1, undo 2, undo 3, pehla undo karo, dusra undo karo, last wala undo karo, undo kar do)
-  if (/^undo\s*$/i.test(lower) || /^undo\s+kar\s+do\s*$/i.test(lower) || /^last\s+(?:command\s+)?undo\s*$/i.test(lower)) {
-    return { action: "undo", undoPosition: 1 };
-  }
+  // --- Undo: "undo" / "undo kar do" = undo LAST (most recent). "undo 1" = undo FIRST action, "undo 2" = second, "undo 3" = third.
   const undoNum = lower.match(/^undo\s+(\d+)\s*$/) || lower.match(/^undo\s+kar\s+do\s+(\d+)\s*$/);
   if (undoNum) {
     const pos = parseInt(undoNum[1], 10);
     if (pos >= 1 && pos <= 3) return { action: "undo", undoPosition: pos };
+  }
+  if (/^undo\s*$/i.test(lower) || /^undo\s+kar\s+do\s*$/i.test(lower) || /^last\s+(?:command\s+)?undo\s*$/i.test(lower) || /^last\s+wala\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
+    return { action: "undo", undoPosition: 0 };
   }
   if (/^(?:pehla|pehla\s+wala)\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower) || /^first\s+undo\s*$/i.test(lower)) {
     return { action: "undo", undoPosition: 1 };
@@ -87,9 +119,6 @@ function parseCommand(text) {
   }
   if (/^(?:teesra|teesra\s+wala|third)\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
     return { action: "undo", undoPosition: 3 };
-  }
-  if (/^last\s+wala\s+undo\s+(?:karo|kar\s+do)\s*$/i.test(lower)) {
-    return { action: "undo", undoPosition: 1 };
   }
 
   // --- Voice sale: English + Roman Urdu (sale kr do, bech do, de do, nikal do, dedena = sell)
@@ -115,15 +144,13 @@ function parseCommand(text) {
       else payVal = (payMatch[1] || payMatch[2] || payMatch[3] || payMatch[4] || payMatch[5] || payMatch[6] || "").toLowerCase();
     }
     const paymentMethod = /card/i.test(payVal) ? "card" : "cash";
-    let productPart = (voiceSaleAdd[1] || "").replace(/\s*(?:and\s+)?(?:set\s+)?payment\s+(?:method\s+to\s+)?(?:is\s+)?\w+(\s+hai)?.*$/i, "").replace(/\s*(?:on\s+)?sale\s+ko\s+complete.*$/i, "").replace(/\s*,\s*complete.*$/i, "").replace(/\s+payment\s+.*$/i, "").replace(/\s+(?:cash\s+rakh\s+lo|cash\s+par|card\s+se|card\s+par|online\s+payment|bank\s+transfer).*$/i, "").trim();
-    productPart = productPart.replace(/^(a|the)\s+/i, "").trim();
-    productPart = productPart.replace(/\banday\b/gi, "eggs");
-    const segments = productPart.split(/\s+and\s+|\s*,\s*/).map((s) => s.trim()).filter(Boolean);
+    let productPart = (voiceSaleAdd[1] || "").replace(/\s*(?:and\s+)?(?:set\s+)?payment\s+(?:method\s+to\s+)?(?:is\s+)?\w+(\s+hai)?.*$/i, "").replace(/\s*(?:on\s+)?sale\s+ko\s+complete.*$/i, "").replace(/\s*,\s*complete.*$/i, "").replace(/\s+payment\s+.*$/i, "").replace(/\s+(?:cash\s+rakh\s+lo|cash\s+par|card\s+se|card\s+par|card\s+rakhni\s+hai|online\s+payment|bank\s+transfer).*$/i, "").trim();
+    productPart = productPart.replace(/^(a|the|acha\s+yar|yar\s+acha|acha|oy\s+yar)\s+/i, "").trim();
+    productPart = productPart.replace(/\banday\b/gi, "eggs").replace(/\banda\b/gi, "eggs");
+    const segments = productPart.split(/\s+and\s+|\s+aur\s+|\s+or\s+|\s*,\s*/).map((s) => s.trim()).filter(Boolean);
     const items = [];
     for (const n of segments) {
-      const qtyMatch = n.match(/^(\d+)\s+(.+)$/);
-      const name = qtyMatch ? qtyMatch[2].trim() : n;
-      const quantity = qtyMatch ? Math.max(1, parseInt(qtyMatch[1], 10) || 1) : 1;
+      const { quantity, name } = parseQuantityFromSegment(n);
       if (name && !/^(set|payment|method|to|card|cash|rakh|lo|par|se)$/i.test(name)) items.push({ name, quantity });
     }
     if (items.length > 0) return { action: "voice_sale", items, paymentMethod };

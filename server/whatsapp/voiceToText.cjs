@@ -23,23 +23,30 @@ async function transcribeWithGemini(mediaBuffer, mimetype) {
   const b64 = mediaBuffer.toString("base64");
   const transcriptionInstructions = `Transcribe the user's voice message accurately.
 
-Rules:
-1. The user may speak in Roman Urdu, Urdu, or English, or a mix.
-2. Convert the speech into clear, readable text that a POS (point-of-sale) bot can understand.
-3. Keep numbers accurate (e.g., "7 eggs", "3 milk").
-4. Do not change the meaning of the sentence.
-5. Preserve intent when mixing languages.
+CRITICAL – CUSTOMER NAMES (never drop these):
+- When the user says "<name> ko" (e.g. najmi ko, umair ko, safeer ko, azam ko), ALWAYS transcribe the name and "ko" exactly. Never drop or skip customer names.
+- Filler words at the start (acha, yar, please, bhai, zara, ek kaam karo) – transcribe them; they will be ignored by the bot. But NEVER drop the customer name that comes before "ko".
+- Example: "acha yar najmi ko 2 anday aur 1 bread dy do" → transcribe as "acha yar najmi ko 2 anday aur 1 bread dy do" (or "najmi ko 2 anday aur 1 bread dy do" if fillers are unclear). The name "najmi" and "ko" MUST appear.
 
-Roman Urdu SALE phrases (all mean SELL) – normalize to "sell":
-- sale kr do, sale kardo, bech do, de do, nikal do, dedena → "sell"
+Roman Urdu ADD-TO-BILL phrases (keep "X ko" and "dy do"/"de do"):
+- "X ko N product dy do" / "X ko N product de do" = add to X's bill. Keep "X ko" and "dy do" or "de do" in the transcript. Do NOT change "dy do" to "sell" when there is a customer name before "ko".
+- dy do, de do, laga do, daal do = add to bill (when used with "X ko"). Transcribe as spoken.
+
+Roman Urdu SALE phrases (when NO customer name) – can normalize:
+- sale kr do, sale kar do, bech do, nikal do → "sell" (only when there is no "X ko" pattern)
+
+Rules:
+1. Preserve customer names and "X ko" exactly. Never drop names.
+2. Keep numbers accurate (e.g. "7 eggs", "3 milk").
+3. "anday" = eggs. Keep product names as spoken.
 
 Roman Urdu PAYMENT phrases – normalize so payment method is clear:
 - cash rakh lo, cash par, cash payment, cash → "payment cash" or "pay with cash"
 - card se, card par, card payment → "payment card" or "pay with card"
 - online payment, bank transfer → "payment card" (use card for POS)
 
-Quantity: If a number appears before a product name, keep it (that number = quantity).
-Product names: "anday" = eggs. Keep other product names as spoken.
+Quantity: If the user says a number word (Roman Urdu/Urdu), write it as a digit so the POS can parse: ek=1, do=2, teen=3, char=4, paanch=5, chhe=6, saat=7, aath=8, nau=9, das=10. E.g. "teen anday do bread" → "3 anday 2 bread" or "3 eggs 2 bread".
+Product names: "anday" = eggs. Keep other product names as spoken. For multiple products in one sentence, keep all (e.g. "3 eggs and 2 bread and 1 aquafina").
 
 Roman Urdu DELETE phrases (all mean DELETE PRODUCT FROM INVENTORY) – keep product name and delete intent clear:
 - delete kar do, delete kr do, delete krdo, remove kar do, remove kr do, remove krdo
@@ -53,6 +60,8 @@ Roman Urdu EXPENSE phrases (ADD EXPENSE) – keep category/description and amoun
 - Preserve numbers exactly (7000, 5000, 1.5 etc.). Preserve category words: bijli, bill, rent, gas, salary, utilities, kharcha, lagan.
 
 Examples:
+- "acha yar najmi ko 2 anday aur 1 bread dy do" → "najmi ko 2 anday aur 1 bread dy do" or "acha yar najmi ko 2 anday aur 1 bread dy do" (MUST include "najmi ko")
+- "umair ko egg sale kar do" → "umair ko egg sale kar do" or "umair ko egg sell do" (MUST include "umair ko")
 - "7 anday bech do" → "sell 7 eggs"
 - "2 coke sale kr do" → "sell 2 coke"
 - "3 bread cash par" → "sell 3 bread payment cash"

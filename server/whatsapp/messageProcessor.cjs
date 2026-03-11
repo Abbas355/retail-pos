@@ -15,8 +15,12 @@ const { classifyExpenseCategory } = require("./expenseCategoryClassifier.cjs");
 const API_BASE = process.env.POS_API_URL || `http://localhost:${process.env.PORT || 3000}`;
 
 const processedIds = new Set();
-/** Pending voice-sale confirmations: from (phone) -> { items, paymentMethod, customer, cashier } */
+/** Pending voice-sale: from -> { items, paymentMethod, customer, cashier, at, state?: 'confirm'|'add_more'|'waiting_products' } (used when no multi-bill flow) */
 const pendingVoiceSales = new Map();
+/** Multi-customer open bills: from -> { [customerKey]: { customerName, items: [{ name, quantity }], paymentMethod, state?: 'open'|'add_more'|'waiting_products', at } } */
+const pendingBills = new Map();
+/** When asking "Which customer?" we wait for next message to pick customer: from -> { at } */
+const pendingWhichCustomer = new Map();
 /** Pending delete confirmations: from -> { productId, productName, at } */
 const pendingDeletes = new Map();
 /** Action history for undo: from -> [{ action, label, payload }], max 3 per user */
@@ -74,6 +78,171 @@ function getPendingDelete(from) {
   }
   return entry;
 }
+
+function normalizeCustomerKey(name) {
+  if (!name || typeof name !== "string") return "";
+  return String(name).trim().toLowerCase().replace(/\s+/g, "_") || "";
+}
+
+function getBills(from) {
+  const obj = pendingBills.get(from);
+  if (!obj) return {};
+  const now = Date.now();
+  const out = {};
+  for (const [k, bill] of Object.entries(obj)) {
+    if (bill && (now - (bill.at || 0)) <= PENDING_EXPIRY_MS) out[k] = bill;
+  }
+  if (Object.keys(out).length === 0) pendingBills.delete(from);
+  else pendingBills.set(from, out);
+  return out;
+}
+
+function getBill(from, customerKey) {
+  const bills = getBills(from);
+  return bills[customerKey] || null;
+}
+
+function setBill(from, customerKey, bill) {
+  let obj = pendingBills.get(from) || {};
+  obj = { ...obj, [customerKey]: { ...bill, at: Date.now() } };
+  pendingBills.set(from, obj);
+}
+
+function removeBill(from, customerKey) {
+  const obj = pendingBills.get(from) || {};
+  const next = { ...obj };
+  delete next[customerKey];
+  if (Object.keys(next).length === 0) pendingBills.delete(from);
+  else pendingBills.set(from, next);
+}
+
+function getOpenBillCustomerNames(from) {
+  const bills = getBills(from);
+  return Object.values(bills).map((b) => (b.customerName || "Customer")).filter(Boolean);
+}
+
+function getSingleOpenBill(from) {
+  const bills = getBills(from);
+  const keys = Object.keys(bills);
+  if (keys.length !== 1) return null;
+  return { customerKey: keys[0], bill: bills[keys[0]] };
+}
+
+function getBillInWaitingProducts(from) {
+  const bills = getBills(from);
+  for (const [customerKey, bill] of Object.entries(bills)) {
+    if (bill.state === "waiting_products") return { customerKey, bill };
+  }
+  return null;
+}
+
+function getBillInAddMoreOrPayment(from) {
+  const bills = getBills(from);
+  for (const [customerKey, bill] of Object.entries(bills)) {
+    if (bill.state === "add_more_or_payment") return { customerKey, bill };
+  }
+  return null;
+}
+
+function getBillInChoosePayment(from) {
+  const bills = getBills(from);
+  for (const [customerKey, bill] of Object.entries(bills)) {
+    if (bill.state === "choose_payment") return { customerKey, bill };
+  }
+  return null;
+}
+
+/** Voice transcript fillers and timestamp pattern – strip so we get only the real name. */
+const VOICE_FILLERS = /\b(achha|acha|achar|yar|oy|oh|um|uh)\b/gi;
+const VOICE_TIMESTAMP = /\d{1,2}:\d{2}\s*/g;
+
+function cleanExtractedCustomerName(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  let s = raw
+    .replace(VOICE_TIMESTAMP, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  while (true) {
+    const next = s.replace(VOICE_FILLERS, " ").replace(/\s+/g, " ").trim();
+    if (next === s) break;
+    s = next;
+  }
+  s = s.replace(/\s+na\s*$/i, "").trim();
+  const words = s.split(/\s+/).filter((w) => /^[A-Za-z\u00C0-\u024F]{2,}$/.test(w));
+  if (words.length === 0) return s.trim();
+  if (words.length >= 2 && words[words.length - 2].length >= 2) {
+    return (words[words.length - 2] + " " + words[words.length - 1]).trim();
+  }
+  return words[words.length - 1];
+}
+
+/** Clean voice transcript body before intent/parsing so timestamps and fillers don't affect name or products. */
+function cleanVoiceTranscript(body) {
+  if (!body || typeof body !== "string") return body;
+  let s = body.replace(VOICE_TIMESTAMP, " ").replace(/\s+/g, " ").trim();
+  s = s.replace(/\b(achha|acha)\s+yar\s+/gi, " ").replace(/\b(achha|acha)\s+/gi, " ").trim();
+  return s.trim() || body;
+}
+
+/**
+ * Extract the exact customer name from the message.
+ * Supports: "<name> ko 2 detergent dy do", "2 detergent dy do <name> ko", "<name> ka bill nikal do", "<name> ki payment".
+ */
+function getExactCustomerNameFromMessage(body) {
+  if (!body || typeof body !== "string") return null;
+  const s = body.trim();
+  if (!s) return null;
+  let raw = null;
+  const koMid = s.match(/([A-Za-z\u00C0-\u024F]+(?:\s+[A-Za-z\u00C0-\u024F]+)?)\s+ko\s+/i);
+  if (koMid && koMid[1]) raw = koMid[1].trim();
+  if (!raw) {
+    const koEnd = s.match(/\s+([A-Za-z\u00C0-\u024F]+)\s+ko\s*$/i);
+    if (koEnd && koEnd[1]) raw = koEnd[1].trim();
+  }
+  if (!raw) {
+    const kaBill = s.match(/([A-Za-z\u00C0-\u024F]+)\s+ka\s+bill/i) || s.match(/([A-Za-z\u00C0-\u024F]+)\s+ke\s+bill/i);
+    if (kaBill && kaBill[1]) raw = kaBill[1].trim();
+  }
+  if (!raw) {
+    const kiMatch = s.match(/([A-Za-z\u00C0-\u024F]+)\s+ki\s+payment/i);
+    if (kiMatch && kiMatch[1]) raw = kiMatch[1].trim();
+  }
+  if (!raw) return null;
+  const cleaned = cleanExtractedCustomerName(raw);
+  return cleaned || null;
+}
+
+/**
+ * Ensure a customer exists in the database with the exact name as given (voice/text).
+ * If not found, creates the customer with that exact name. Returns { id, name } or null on error.
+ */
+async function ensureCustomerExists(apiBase, exactName) {
+  if (!exactName || typeof exactName !== "string") return null;
+  const nameToStore = exactName.trim();
+  if (!nameToStore) return null;
+  try {
+    const res = await fetch(`${apiBase}/api/customers`);
+    const list = await res.json().catch(() => []);
+    if (!res.ok || !Array.isArray(list)) return null;
+    const found = list.find((c) => String(c.name || "").trim().toLowerCase() === nameToStore.toLowerCase());
+    if (found) return { id: found.id, name: found.name };
+    const createRes = await fetch(`${apiBase}/api/customers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nameToStore, phone: "" }),
+    });
+    const data = await createRes.json().catch(() => ({}));
+    if (createRes.ok && data.id) {
+      console.log("  → Customer auto-added from voice:", nameToStore);
+      return { id: data.id, name: data.name || nameToStore };
+    }
+    return null;
+  } catch (err) {
+    console.error("ensureCustomerExists error:", err);
+    return null;
+  }
+}
+
 const MAX_PROCESSED = 200;
 
 function normalizePhone(phone) {
@@ -137,6 +306,11 @@ async function processIncomingMessage(msg, client) {
     console.log(`[${new Date().toISOString()}] From: ${from} | ${body}`);
   }
 
+  if (body && /\d{1,2}:\d{2}/.test(body)) {
+    body = cleanVoiceTranscript(body);
+    if (body) console.log("  → Voice transcript cleaned:", body);
+  }
+
   const allowed = getAllowedPhones();
   if (allowed && allowed.length > 0) {
     const senderPhone = normalizePhone(msg.from);
@@ -154,68 +328,150 @@ async function processIncomingMessage(msg, client) {
   if (bodyUpper === "YES" || bodyUpper === "NO") {
     const pending = getPendingSale(msg.from);
     if (pending) {
-      if (bodyUpper === "YES") {
-        pendingVoiceSales.delete(msg.from);
-        try {
-          const resProducts = await fetch(`${API_BASE}/api/products`);
-          const products = await resProducts.json().catch(() => []);
-          if (!resProducts.ok || !Array.isArray(products)) {
-            await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
-            return;
-          }
-          const saleItems = [];
-          const notFound = [];
-          for (const it of pending.items) {
-            const qty = Math.max(1, it.quantity || 1);
-            const closest = findClosestProduct(it.name || "", products);
-            const product = closest ? closest.product : null;
-            if (product && product.stock >= qty) {
-              saleItems.push({
-                product: { id: product.id, name: product.name, price: Number(product.price) },
-                quantity: qty,
-              });
-            } else if (product && product.stock < qty) {
-              notFound.push(`${product.name} (only ${product.stock} in stock)`);
-            } else {
-              notFound.push(it.name || "?");
+      const state = pending.state || "confirm";
+      if (state === "waiting_products") {
+        if (bodyUpper === "NO") {
+          pendingVoiceSales.delete(msg.from);
+          try {
+            const resProducts = await fetch(`${API_BASE}/api/products`);
+            const products = await resProducts.json().catch(() => []);
+            if (!resProducts.ok || !Array.isArray(products)) {
+              await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
+              return;
             }
+            const saleItems = [];
+            const notFound = [];
+            for (const it of pending.items) {
+              const qty = Math.max(1, it.quantity || 1);
+              const closest = findClosestProduct(it.name || "", products);
+              const product = closest ? closest.product : null;
+              if (product && product.stock >= qty) {
+                saleItems.push({
+                  product: { id: product.id, name: product.name, price: Number(product.price) },
+                  quantity: qty,
+                });
+              } else if (product && product.stock < qty) {
+                notFound.push(`${product.name} (only ${product.stock} in stock)`);
+              } else {
+                notFound.push(it.name || "?");
+              }
+            }
+            if (saleItems.length === 0) {
+              await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`);
+              return;
+            }
+            const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+            const resSale = await fetch(`${API_BASE}/api/sales`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                items: saleItems,
+                total,
+                paymentMethod: pending.paymentMethod || "cash",
+                cashier: pending.cashier || "WhatsApp User",
+                customerId: null,
+              }),
+            });
+            const saleData = await resSale.json().catch(() => ({}));
+            if (resSale.ok) {
+              const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+              pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+              const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
+              await client.sendMessage(msg.from, `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${pending.paymentMethod || "cash"}${extra}`);
+              console.log("  → Voice sale (completed from waiting_products NO):", saleItems.length, "item(s), Rs", total);
+            } else {
+              await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
+            }
+          } catch (err) {
+            console.error("Voice sale (waiting_products NO) error:", err);
+            await client.sendMessage(msg.from, "Error completing sale. Please try again.");
           }
-          if (saleItems.length === 0) {
-            await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`);
-            return;
-          }
-          const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
-          const resSale = await fetch(`${API_BASE}/api/sales`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              items: saleItems,
-              total,
-              paymentMethod: pending.paymentMethod || "cash",
-              cashier: pending.cashier || "WhatsApp User",
-              customerId: null,
-            }),
-          });
-          const saleData = await resSale.json().catch(() => ({}));
-          if (resSale.ok) {
-            const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
-            pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
-            const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
-            await client.sendMessage(msg.from, `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${pending.paymentMethod || "cash"}${extra}`);
-            console.log("  → Voice sale (confirmed):", saleItems.length, "item(s), Rs", total);
-          } else {
-            await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
-          }
-        } catch (err) {
-          console.error("Voice sale (YES) error:", err);
-          await client.sendMessage(msg.from, "Error completing sale. Please try again.");
+        } else {
+          await client.sendMessage(msg.from, "Please add the product now (type or send a voice message, e.g. *2 milk 1 coke*).");
         }
-      } else {
-        pendingVoiceSales.delete(msg.from);
-        await client.sendMessage(msg.from, "Request cancelled. Please send the correct instruction (e.g. *Sell 2 Milk, payment cash*).");
-        console.log("  → Voice sale: user said NO, cancelled");
+        return;
       }
-      return;
+      if (state === "add_more") {
+        if (bodyUpper === "YES") {
+          pending.state = "waiting_products";
+          pending.at = Date.now();
+          pendingVoiceSales.set(msg.from, pending);
+          await client.sendMessage(msg.from, "Please add the product now (type or send a voice message, e.g. *2 milk 1 coke*).");
+          console.log("  → Voice sale: waiting for more products");
+        } else {
+          pendingVoiceSales.delete(msg.from);
+          try {
+            const resProducts = await fetch(`${API_BASE}/api/products`);
+            const products = await resProducts.json().catch(() => []);
+            if (!resProducts.ok || !Array.isArray(products)) {
+              await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
+              return;
+            }
+            const saleItems = [];
+            const notFound = [];
+            for (const it of pending.items) {
+              const qty = Math.max(1, it.quantity || 1);
+              const closest = findClosestProduct(it.name || "", products);
+              const product = closest ? closest.product : null;
+              if (product && product.stock >= qty) {
+                saleItems.push({
+                  product: { id: product.id, name: product.name, price: Number(product.price) },
+                  quantity: qty,
+                });
+              } else if (product && product.stock < qty) {
+                notFound.push(`${product.name} (only ${product.stock} in stock)`);
+              } else {
+                notFound.push(it.name || "?");
+              }
+            }
+            if (saleItems.length === 0) {
+              await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`);
+              return;
+            }
+            const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+            const resSale = await fetch(`${API_BASE}/api/sales`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                items: saleItems,
+                total,
+                paymentMethod: pending.paymentMethod || "cash",
+                cashier: pending.cashier || "WhatsApp User",
+                customerId: null,
+              }),
+            });
+            const saleData = await resSale.json().catch(() => ({}));
+            if (resSale.ok) {
+              const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+              pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+              const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
+              await client.sendMessage(msg.from, `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${pending.paymentMethod || "cash"}${extra}`);
+              console.log("  → Voice sale (completed, no more):", saleItems.length, "item(s), Rs", total);
+            } else {
+              await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
+            }
+          } catch (err) {
+            console.error("Voice sale (NO add more) error:", err);
+            await client.sendMessage(msg.from, "Error completing sale. Please try again.");
+          }
+        }
+        return;
+      }
+      if (state === "confirm") {
+        if (bodyUpper === "YES") {
+          pending.state = "add_more";
+          pending.at = Date.now();
+          pendingVoiceSales.set(msg.from, pending);
+          const parts = pending.items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+          await client.sendMessage(msg.from, `I've added those items to the bill: ${parts}.\n\nDo you want to add more products to this bill? Reply *YES* to add more or *NO* to complete the sale.`);
+          console.log("  → Voice sale: confirmed, asking add more");
+        } else {
+          pendingVoiceSales.delete(msg.from);
+          await client.sendMessage(msg.from, "Request cancelled. Please send the correct instruction (e.g. *Sell 2 Milk, payment cash*).");
+          console.log("  → Voice sale: user said NO, cancelled");
+        }
+        return;
+      }
     }
     const pendingDel = getPendingDelete(msg.from);
     if (pendingDel) {
@@ -249,7 +505,252 @@ async function processIncomingMessage(msg, client) {
     }
   }
 
+  const whichCustomerPending = pendingWhichCustomer.get(msg.from);
+  if (whichCustomerPending && (Date.now() - (whichCustomerPending.at || 0)) <= PENDING_EXPIRY_MS) {
+    const bills = getBills(msg.from);
+    const bodyTrim = (body || "").trim().toLowerCase();
+    let matchedKey = null;
+    for (const key of Object.keys(bills)) {
+      const bill = bills[key];
+      const displayName = (bill && bill.customerName) ? bill.customerName.toLowerCase() : key.replace(/_/g, " ");
+      if (displayName === bodyTrim || displayName.startsWith(bodyTrim) || bodyTrim.startsWith(displayName) || key === bodyTrim.replace(/\s+/g, "_")) {
+        matchedKey = key;
+        break;
+      }
+    }
+    if (matchedKey) {
+      pendingWhichCustomer.delete(msg.from);
+      if (whichCustomerPending.action === "complete_payment") {
+        const bill = getBill(msg.from, matchedKey);
+        if (!bill || !bill.items || bill.items.length === 0) {
+          await client.sendMessage(msg.from, `No open bill for that customer, or bill is empty.`);
+          return;
+        }
+        try {
+          const resProducts = await fetch(`${API_BASE}/api/products`);
+          const products = await resProducts.json().catch(() => []);
+          if (!resProducts.ok || !Array.isArray(products)) {
+            await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
+            return;
+          }
+          const saleItems = [];
+          const notFound = [];
+          for (const it of bill.items) {
+            const qty = Math.max(1, it.quantity || 1);
+            const closest = findClosestProduct(it.name || "", products);
+            const product = closest ? closest.product : null;
+            if (product && product.stock >= qty) {
+              saleItems.push({ product: { id: product.id, name: product.name, price: Number(product.price) }, quantity: qty });
+            } else if (product && product.stock < qty) {
+              notFound.push(`${product.name} (only ${product.stock} in stock)`);
+            } else {
+              notFound.push(it.name || "?");
+            }
+          }
+          if (saleItems.length === 0) {
+            await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}.`);
+            return;
+          }
+          let customerId = bill.customerId || null;
+          const billCustomerName = bill.customerName || matchedKey.replace(/_/g, " ");
+          if (!customerId && billCustomerName && billCustomerName !== "Walk-in") {
+            const customerRecord = await ensureCustomerExists(API_BASE, billCustomerName);
+            if (customerRecord) customerId = customerRecord.id;
+          }
+          const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+          const resSale = await fetch(`${API_BASE}/api/sales`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              items: saleItems,
+              total,
+              paymentMethod: bill.paymentMethod || "cash",
+              cashier: from || "WhatsApp User",
+              customerId: customerId || undefined,
+            }),
+          });
+          const saleData = await resSale.json().catch(() => ({}));
+          if (resSale.ok) {
+            removeBill(msg.from, matchedKey);
+            const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+            pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+            await client.sendMessage(msg.from, `✅ *Bill closed!*\n${bill.customerName || matchedKey}'s sale completed.\nTotal: Rs ${total.toFixed(2)}\nPayment: ${bill.paymentMethod || "cash"}`);
+          } else {
+            await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
+          }
+        } catch (err) {
+          console.error("Complete payment (which customer) error:", err);
+          await client.sendMessage(msg.from, "Error completing sale. Please try again.");
+        }
+      } else if (whichCustomerPending.action === "add_to_bill" && whichCustomerPending.items && whichCustomerPending.items.length > 0) {
+        let existing = getBill(msg.from, matchedKey);
+        const replyName = (body || "").trim();
+        const displayName = replyName && replyName.length <= 50 ? replyName : ((existing && existing.customerName) || matchedKey.replace(/_/g, " "));
+        if (!existing) {
+          existing = { customerName: displayName, items: [], paymentMethod: whichCustomerPending.paymentMethod || "cash", state: "open" };
+        } else {
+          existing = { ...existing, items: [...(existing.items || [])] };
+        }
+        if (matchedKey !== "walk_in" && displayName !== "Walk-in") {
+          const customerRecord = await ensureCustomerExists(API_BASE, displayName);
+          if (customerRecord) existing.customerId = customerRecord.id;
+        }
+        existing.items = [...existing.items, ...whichCustomerPending.items];
+        existing.state = "open";
+        setBill(msg.from, matchedKey, existing);
+        const added = whichCustomerPending.items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+        await client.sendMessage(msg.from, `Added to *${existing.customerName || matchedKey}'s* bill: ${added}.`);
+      }
+    } else {
+      const names = Object.entries(bills).map(([k, b]) => (b && b.customerName) || k.replace(/_/g, " "));
+      await client.sendMessage(msg.from, `Which customer's bill? Please reply with one of: *${names.join("* or *")}*`);
+    }
+    return;
+  } else if (whichCustomerPending) {
+    pendingWhichCustomer.delete(msg.from);
+  }
+
+  const billChoosePayment = getBillInChoosePayment(msg.from);
+  if (billChoosePayment) {
+    const bodyLower = (body || "").trim().toLowerCase();
+    const isCash = /^cash$/i.test(bodyLower) || bodyLower === "cash";
+    const isCard = /^card$/i.test(bodyLower) || bodyLower === "card";
+    if (isCash || isCard) {
+      const { customerKey, bill } = billChoosePayment;
+      const paymentMethod = isCard ? "card" : "cash";
+      try {
+        const resProducts = await fetch(`${API_BASE}/api/products`);
+        const products = await resProducts.json().catch(() => []);
+        if (!resProducts.ok || !Array.isArray(products)) {
+          await client.sendMessage(msg.from, "Could not fetch products. Sale cancelled.");
+          return;
+        }
+        const saleItems = [];
+        const notFound = [];
+        for (const it of bill.items || []) {
+          const qty = Math.max(1, it.quantity || 1);
+          const closest = findClosestProduct(it.name || "", products);
+          const product = closest ? closest.product : null;
+          if (product && product.stock >= qty) {
+            saleItems.push({ product: { id: product.id, name: product.name, price: Number(product.price) }, quantity: qty });
+          } else if (product && product.stock < qty) {
+            notFound.push(`${product.name} (only ${product.stock} in stock)`);
+          } else {
+            notFound.push(it.name || "?");
+          }
+        }
+        if (saleItems.length === 0) {
+          await client.sendMessage(msg.from, `Product(s) not found or out of stock: ${notFound.join(", ")}.`);
+          return;
+        }
+        let customerId = bill.customerId || null;
+        if (!customerId && bill.customerName && bill.customerName !== "Walk-in") {
+          const customerRecord = await ensureCustomerExists(API_BASE, bill.customerName);
+          if (customerRecord) customerId = customerRecord.id;
+        }
+        const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+        const resSale = await fetch(`${API_BASE}/api/sales`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: saleItems,
+            total,
+            paymentMethod,
+            cashier: from || "WhatsApp User",
+            customerId: customerId || undefined,
+          }),
+        });
+        const saleData = await resSale.json().catch(() => ({}));
+        if (resSale.ok) {
+          removeBill(msg.from, customerKey);
+          const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+          pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+          await client.sendMessage(msg.from, `✅ *Bill closed!*\n${bill.customerName || customerKey.replace(/_/g, " ")}'s sale completed.\nTotal: Rs ${total.toFixed(2)}\nPayment: ${paymentMethod}`);
+        } else {
+          await client.sendMessage(msg.from, saleData.error || `Sale failed (${resSale.status}).`);
+        }
+      } catch (err) {
+        console.error("Choose payment close error:", err);
+        await client.sendMessage(msg.from, "Error completing sale. Please try again.");
+      }
+    } else {
+      await client.sendMessage(msg.from, "Please reply *cash* or *card* for the payment method.");
+    }
+    return;
+  }
+
+  const billAddMoreOrPayment = getBillInAddMoreOrPayment(msg.from);
+  if (billAddMoreOrPayment) {
+    const bodyLower = (body || "").trim().toLowerCase();
+    const looksLikeNewAdd = /\b\w+\s+ko\s+/.test(bodyLower) && /\d+/.test(bodyLower);
+    const looksLikeBillClose = /\bbill\s+nikal\b|\bka\s+bill\b|\bbill\s+complete\b|payment\s+(cash|card)\s*(ha|hai|rakhni)?/i.test(bodyLower);
+    if (!looksLikeNewAdd && !looksLikeBillClose) {
+      const bodyUpper = bodyLower.toUpperCase();
+      const yesAddMore = bodyUpper === "YES" || bodyLower === "add more" || bodyLower === "add more products";
+      const noPayNow = bodyUpper === "NO" || bodyLower === "payment" || bodyLower === "pay" || bodyLower === "pay now";
+      if (yesAddMore) {
+        const { customerKey, bill } = billAddMoreOrPayment;
+        const updated = { ...bill, state: "waiting_products", at: Date.now() };
+        setBill(msg.from, customerKey, updated);
+        await client.sendMessage(msg.from, `Please add the products now (e.g. *2 milk 1 bread* or send a voice message).`);
+        return;
+      }
+      if (noPayNow) {
+        const { customerKey, bill } = billAddMoreOrPayment;
+        const updated = { ...bill, state: "choose_payment", at: Date.now() };
+        setBill(msg.from, customerKey, updated);
+        await client.sendMessage(msg.from, `What payment method? Reply *cash* or *card*.`);
+        return;
+      }
+      await client.sendMessage(msg.from, "Reply *YES* to add more products, or *NO* to complete the payment now (then I'll ask for cash/card).");
+      return;
+    }
+  }
+
+  const billWaiting = getBillInWaitingProducts(msg.from);
+  if (billWaiting) {
+    const intentCommand = await getIntentFromMessage(body);
+    const newItems = (intentCommand && intentCommand.action === "voice_sale" && intentCommand.items && intentCommand.items.length > 0) ? intentCommand.items : [];
+    if (newItems.length > 0) {
+      const { customerKey, bill } = billWaiting;
+      const updated = { ...bill, items: [...(bill.items || []), ...newItems], state: "open", at: Date.now() };
+      setBill(msg.from, customerKey, updated);
+      const added = newItems.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+      await client.sendMessage(msg.from, `Added to *${bill.customerName || customerKey}'s* bill: ${added}.`);
+      return;
+    }
+    await client.sendMessage(msg.from, "I couldn't understand the products. Send e.g. *2 milk 1 coke*, or reply *NO* to complete the sale without adding more.");
+    return;
+  }
+
+  const pendingWaiting = getPendingSale(msg.from);
+  if (pendingWaiting && (pendingWaiting.state === "waiting_products" || pendingWaiting.state === "add_more")) {
+    const intentCommand = await getIntentFromMessage(body);
+    const newItems = (intentCommand && intentCommand.action === "voice_sale" && intentCommand.items && intentCommand.items.length > 0)
+      ? intentCommand.items
+      : [];
+    if (newItems.length > 0) {
+      pendingWaiting.items = [...(pendingWaiting.items || []), ...newItems];
+      pendingWaiting.state = "add_more";
+      pendingWaiting.at = Date.now();
+      pendingVoiceSales.set(msg.from, pendingWaiting);
+      const added = newItems.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+      await client.sendMessage(msg.from, `Added to bill: ${added}.\n\nDo you want to add more products? Reply *YES* to add more or *NO* to complete the sale.`);
+      console.log("  → Voice sale: added more items", newItems.length, "total items:", pendingWaiting.items.length);
+      return;
+    }
+    await client.sendMessage(msg.from, "I couldn't understand the products. Please send e.g. *2 milk 1 coke*, or reply *NO* to complete the sale without adding more.");
+    return;
+  }
+
   let command = parseCommand(body);
+  const quantityNumberCount = (body.match(/\d+/g) || []).filter((n) => {
+    const v = parseInt(n, 10);
+    return v >= 1 && v <= 999;
+  }).length;
+  if (command.action === "voice_sale" && command.items && command.items.length < quantityNumberCount && quantityNumberCount >= 2) {
+    command = { action: "unknown" };
+  }
   if (command.action === "unknown") {
     const intentCommand = await getIntentFromMessage(body);
     if (intentCommand) {
@@ -269,8 +770,10 @@ async function processIncomingMessage(msg, client) {
   try {
     if (command.action === "undo") {
       const history = getActionHistory(msg.from);
-      const position = Math.min(Math.max(1, Number(command.undoPosition) || 1), 3);
-      const index = position - 1;
+      const position = Number(command.undoPosition);
+      const index = position === 0
+        ? 0
+        : Math.max(0, history.length - Math.min(Math.max(1, position), 3));
       if (index >= history.length) {
         reply = "No command available to undo.";
         console.log("  → Undo: no action at position", position, "history:", history.length);
@@ -745,19 +1248,130 @@ async function processIncomingMessage(msg, client) {
       const cashier = from || "WhatsApp User";
       const needsConfirmation = command.saleAction === "ask_confirmation" || command.saleConfidence === "low";
 
-      if (needsConfirmation && items.length > 0) {
-        const first = items[0];
-        const productLabel = (first.name || "unknown").toLowerCase() === "unknown" ? "?" : first.name;
-        const qtyLabel = (first.quantity == null || first.quantity === 0) ? "?" : first.quantity;
+      if (command.billAction === "complete_payment") {
+        const exactNameFromMessage = getExactCustomerNameFromMessage(body);
+        const openNames = getOpenBillCustomerNames(msg.from);
+        let customerKey = (exactNameFromMessage || (command.customerName && String(command.customerName).trim())) ? normalizeCustomerKey(exactNameFromMessage || command.customerName) : null;
+        if (!customerKey && openNames.length === 1) {
+          const single = getSingleOpenBill(msg.from);
+          if (single) customerKey = single.customerKey;
+        }
+        if (!customerKey && openNames.length > 1) {
+          pendingWhichCustomer.set(msg.from, { action: "complete_payment", at: Date.now() });
+          reply = "Which customer's bill should I close? Reply with: *" + openNames.join("* or *") + "*";
+        } else if (customerKey) {
+          const bill = getBill(msg.from, customerKey);
+          if (!bill || !bill.items || bill.items.length === 0) {
+            reply = `No open bill for ${command.customerName || customerKey.replace(/_/g, " ")}. Add items first (e.g. *${command.customerName || customerKey} ko 2 bread laga do*).`;
+          } else {
+            try {
+              const resProducts = await fetch(`${API_BASE}/api/products`);
+              const products = await resProducts.json().catch(() => []);
+              if (!resProducts.ok || !Array.isArray(products)) {
+                reply = "Could not fetch products. Sale cancelled.";
+              } else {
+                const saleItems = [];
+                const notFound = [];
+                for (const it of bill.items) {
+                  const qty = Math.max(1, it.quantity || 1);
+                  const closest = findClosestProduct(it.name || "", products);
+                  const product = closest ? closest.product : null;
+                  if (product && product.stock >= qty) {
+                    saleItems.push({ product: { id: product.id, name: product.name, price: Number(product.price) }, quantity: qty });
+                  } else if (product && product.stock < qty) {
+                    notFound.push(`${product.name} (only ${product.stock} in stock)`);
+                  } else {
+                    notFound.push(it.name || "?");
+                  }
+                }
+                if (saleItems.length === 0) {
+                  reply = `Product(s) not found or out of stock: ${notFound.join(", ")}.`;
+                } else {
+                  let customerId = bill.customerId || null;
+                  if (!customerId && bill.customerName && bill.customerName !== "Walk-in") {
+                    const customerRecord = await ensureCustomerExists(API_BASE, bill.customerName);
+                    if (customerRecord) customerId = customerRecord.id;
+                  }
+                  const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+                  const resSale = await fetch(`${API_BASE}/api/sales`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      items: saleItems,
+                      total,
+                      paymentMethod: bill.paymentMethod || "cash",
+                      cashier: from || "WhatsApp User",
+                      customerId: customerId || undefined,
+                    }),
+                  });
+                  const saleData = await resSale.json().catch(() => ({}));
+                  if (resSale.ok) {
+                    removeBill(msg.from, customerKey);
+                    const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+                    pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
+                    reply = `✅ *Bill closed!*\n${bill.customerName || customerKey.replace(/_/g, " ")}'s sale completed.\nTotal: Rs ${total.toFixed(2)}\nPayment: ${bill.paymentMethod || "cash"}`;
+                  } else {
+                    reply = saleData.error || `Sale failed (${resSale.status}).`;
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("Complete payment error:", err);
+              reply = "Error completing sale. Please try again.";
+            }
+          }
+        } else {
+          reply = "No open bill to close. Add items to a customer's bill first (e.g. *Talha ko 2 bread laga do*).";
+        }
+      } else if (command.items && command.items.length > 0 && (command.billAction === "add_to_bill" || !command.billAction)) {
+        const exactNameFromMessage = getExactCustomerNameFromMessage(body);
+        const hasCustomerName = !!(exactNameFromMessage || (command.customerName && String(command.customerName).trim()));
+        // Only add to bill when customer name is in the message. No-name = direct sale (multiple products).
+        if (hasCustomerName) {
+          const openNames = getOpenBillCustomerNames(msg.from);
+          const nameForKey = exactNameFromMessage || (command.customerName && String(command.customerName).trim());
+          let customerKey = nameForKey ? normalizeCustomerKey(nameForKey) : null;
+          if (!customerKey && openNames.length === 1) {
+            const single = getSingleOpenBill(msg.from);
+            if (single) customerKey = single.customerKey;
+          }
+          if (!customerKey && openNames.length > 1) {
+            pendingWhichCustomer.set(msg.from, { action: "add_to_bill", items: command.items, paymentMethod: command.paymentMethod || "cash", at: Date.now() });
+            reply = "Which customer's bill should I add this to? Reply with: *" + openNames.join("* or *") + "*";
+          } else if (customerKey) {
+            let bill = getBill(msg.from, customerKey);
+            const displayName = exactNameFromMessage || (command.customerName && String(command.customerName).trim()) || (bill && bill.customerName) || customerKey.replace(/_/g, " ");
+            if (!bill) bill = { customerName: displayName, items: [], paymentMethod: command.paymentMethod || "cash", state: "open" };
+            else bill = { ...bill, items: [...(bill.items || [])] };
+            if (displayName && displayName !== "Walk-in") {
+              const customerRecord = await ensureCustomerExists(API_BASE, displayName);
+              if (customerRecord) bill.customerId = customerRecord.id;
+            }
+            bill.items = [...bill.items, ...command.items];
+            bill.paymentMethod = bill.paymentMethod || command.paymentMethod || "cash";
+            bill.state = "open";
+            setBill(msg.from, customerKey, bill);
+            const added = command.items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+            reply = `Added to *${displayName}'s* bill: ${added}.`;
+          }
+        }
+      }
+      if (!reply && needsConfirmation && items.length > 0) {
+        const parts = items.map((it) => {
+          const q = (it.quantity == null || it.quantity === 0) ? "?" : it.quantity;
+          const p = (it.name || "unknown").toLowerCase() === "unknown" ? "?" : it.name;
+          return q + " " + p;
+        }).join(", ");
         pendingVoiceSales.set(msg.from, {
           items: [...items],
           paymentMethod,
           customer: command.customer || null,
           cashier,
           at: Date.now(),
+          state: "confirm",
         });
-        reply = "I may have misunderstood your request.\n\nThis is what I understood:\n*Sell " + qtyLabel + " " + productLabel + "*\n\nIs this correct? Reply *YES* to confirm or *NO* to cancel.";
-        console.log("  → Voice sale: ask_confirmation", { product: productLabel, quantity: qtyLabel });
+        reply = "I may have misunderstood your request.\n\nThis is what I understood:\n*Sell " + parts + "*\n\nIs this correct? Reply *YES* to confirm or *NO* to cancel.";
+        console.log("  → Voice sale: ask_confirmation", { items: items.length, parts });
       } else if (items.length === 0 || items.some((it) => !it.name || (it.name || "").toLowerCase() === "unknown")) {
         reply = "I couldn't understand the product or quantity. Please say clearly, e.g. *Sell 2 Milk, payment cash*.";
         console.log("  → Voice sale: missing product/quantity");
@@ -770,12 +1384,15 @@ async function processIncomingMessage(msg, client) {
         } else {
           const saleItems = [];
           const notFound = [];
+          const notFoundItems = [];
           const similarForConfirmation = [];
           for (const it of items) {
             const qty = Math.max(1, it.quantity || 1);
-            const closest = findClosestProduct(it.name || "", products);
+            const spokenName = it.name || "?";
+            const closest = findClosestProduct(spokenName, products);
             if (!closest) {
-              notFound.push(it.name || "?");
+              notFound.push(spokenName);
+              notFoundItems.push({ name: spokenName, quantity: qty });
               continue;
             }
             const { product, confidence } = closest;
@@ -792,39 +1409,52 @@ async function processIncomingMessage(msg, client) {
               similarForConfirmation.push({
                 product: { id: product.id, name: product.name, price: Number(product.price) },
                 quantity: qty,
-                spoken: it.name,
+                spoken: spokenName,
               });
             }
           }
           if (similarForConfirmation.length > 0 && saleItems.length === 0) {
-            const first = similarForConfirmation[0];
-            const parts = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+            const allPendingItems = [
+              ...similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity })),
+              ...notFoundItems.map((n) => ({ name: n.name, quantity: n.quantity })),
+            ];
+            const partsSimilar = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+            const partsNotFound = notFoundItems.length > 0 ? notFoundItems.map((n) => `${n.quantity} ${n.name}`).join(", ") : "";
+            const parts = notFoundItems.length > 0 ? partsSimilar + ", " + partsNotFound : partsSimilar;
             pendingVoiceSales.set(msg.from, {
-              items: similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity })),
+              items: allPendingItems,
               paymentMethod,
               customer: null,
               cashier,
               at: Date.now(),
+              state: "confirm",
             });
-            reply = `I found a similar product in inventory: *${first.product.name}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
-            console.log("  → Voice sale: similar product, ask confirmation", first.product.name);
+            reply = `I found a similar product in inventory: *${similarForConfirmation[0].product.name}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
+            console.log("  → Voice sale: similar product, ask confirmation (all items)", allPendingItems.length, "items:", parts);
           } else if (notFound.length > 0 && saleItems.length === 0) {
             reply = `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`;
             console.log("  → Voice sale: no matches", notFound);
           } else if (saleItems.length === 0) {
             reply = "No valid items for sale. Specify product names (e.g. Sell 2 detergent, payment cash).";
-          } else if (similarForConfirmation.length > 0) {
-            const pendingItems = [...saleItems, ...similarForConfirmation.map((s) => ({ product: s.product, quantity: s.quantity }))];
-            const parts = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+          } else if (similarForConfirmation.length > 0 || notFoundItems.length > 0) {
+            const fromExact = saleItems.map((i) => ({ name: i.product.name, quantity: i.quantity }));
+            const fromSimilar = similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity }));
+            const fromNotFound = notFoundItems.map((n) => ({ name: n.name, quantity: n.quantity }));
+            const allPendingItems = [...fromExact, ...fromSimilar, ...fromNotFound];
+            const partsExact = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
+            const partsSimilar = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
+            const partsNotFound = notFoundItems.map((n) => `${n.quantity} ${n.name}`).join(", ");
+            const parts = [partsExact, partsSimilar, partsNotFound].filter(Boolean).join(", ");
             pendingVoiceSales.set(msg.from, {
-              items: pendingItems.map((i) => ({ name: i.product.name, quantity: i.quantity })),
+              items: allPendingItems,
               paymentMethod,
               customer: null,
               cashier,
               at: Date.now(),
+              state: "confirm",
             });
-            reply = `I found a similar product in inventory: *${similarForConfirmation[0].product.name}*.\n\nDid you mean to sell ${parts}${saleItems.length > 0 ? " (and " + saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ") + ")" : ""}?\n\nReply *YES* to confirm or *NO* to cancel.`;
-            console.log("  → Voice sale: partial similar, ask confirmation");
+            reply = `I found a similar product in inventory: *${(similarForConfirmation[0] || {}).product?.name || "item"}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
+            console.log("  → Voice sale: partial similar, ask confirmation (all items)", allPendingItems.length, "items:", parts);
           } else {
             const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
             const resSale = await fetch(`${API_BASE}/api/sales`, {
@@ -884,14 +1514,23 @@ async function processIncomingMessage(msg, client) {
         "• *show sales report today* – same as above",
         "",
         "*Voice/Text Sale:*",
-        "• *Sell 2 Milk, payment cash* – clear instruction runs immediately",
-        "• *Sell 1 detergent, payment card* – or say product name and quantity",
+        "• *Sell 2 Milk, payment cash* – single product",
+        "• *Sell 3 eggs and 2 bread and 1 aquafina, payment cash* – multiple products in one message",
+        "• Roman Urdu: *teen anday do bread ek aquafina bech do cash par* (3 eggs, 2 bread, 1 aquafina)",
+        "",
+        "*Multiple customer bills (at the same time):*",
+        "• *Talha ko 3 bread aur 2 aquafina laga do* – add to Talha's bill",
+        "• *Ali ko aur 2 milk laga do* – add more to Ali's bill",
+        "• *Talha ki payment cash kar do* – close Talha's bill and take cash payment",
+        "• *payment cash kar do* / *bill close karo* – close the bill (if only one open, else bot asks which customer)",
+        "• *aur 2 bread laga do* – add to the only open bill; if multiple bills open, bot asks which customer",
         "• If unclear, bot will ask: Reply *YES* to confirm or *NO* to cancel",
+        "• After *YES*, bot asks: *Add more products to this bill?* Reply *YES* to add more, then send products. Reply *NO* to complete.",
         "",
         "*Undo:*",
-        "• *undo* or *undo 1* – undo most recent command",
-        "• *undo 2* – undo 2nd last, *undo 3* – undo 3rd last",
-        "• *pehla undo karo*, *dusra undo karo*, *undo kar do*",
+        "• *undo* or *undo kar do* – undo the last (most recent) command",
+        "• *undo 1* – undo the first command you did, *undo 2* – second, *undo 3* – third",
+        "• *pehla undo karo* = undo 1st, *dusra undo karo* = undo 2nd",
         "",
         "• help – show this message",
         "",

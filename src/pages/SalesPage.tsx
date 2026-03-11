@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Percent, Barcode } from "lucide-react";
+import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Percent } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -49,8 +49,10 @@ const SalesPage = () => {
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
-  const [barcodeScan, setBarcodeScan] = useState("");
   const [productNotFoundBarcode, setProductNotFoundBarcode] = useState<string | null>(null);
+
+  const barcodeBufferRef = useRef("");
+  const barcodeResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: customers = [] } = useQuery({
     queryKey: ["customers"],
@@ -116,24 +118,58 @@ const SalesPage = () => {
     });
   };
 
-  const addByBarcode = async () => {
-    const bc = barcodeScan.trim();
-    if (!bc) return;
-    setBarcodeScan("");
+  const addByBarcode = async (bc: string) => {
+    const barcode = bc.trim();
+    if (!barcode) return;
     try {
-      const p = await productsApi.getByBarcode(bc);
+      const p = await productsApi.getByBarcode(barcode);
       if (p && p.stock > 0) {
         addToCart(p);
         toast.success(`${p.name} × 1 added`);
       } else if (p && p.stock <= 0) {
         toast.error("Out of stock");
       } else {
-        setProductNotFoundBarcode(bc);
+        setProductNotFoundBarcode(barcode);
       }
     } catch {
-      setProductNotFoundBarcode(bc);
+      setProductNotFoundBarcode(barcode);
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+      if (isInput) return;
+
+      if (e.key === "Enter") {
+        const buf = barcodeBufferRef.current.trim();
+        if (buf && /^\d{6,}$/.test(buf)) {
+          e.preventDefault();
+          addByBarcode(buf);
+        }
+        barcodeBufferRef.current = "";
+        return;
+      }
+
+      if (e.key.length === 1 && /[\dA-Za-z]/.test(e.key)) {
+        if (barcodeResetTimerRef.current) clearTimeout(barcodeResetTimerRef.current);
+        barcodeBufferRef.current += e.key;
+        barcodeResetTimerRef.current = setTimeout(() => {
+          barcodeBufferRef.current = "";
+          barcodeResetTimerRef.current = null;
+        }, 150);
+      } else if (e.key === "Backspace" && barcodeBufferRef.current.length > 0) {
+        barcodeBufferRef.current = barcodeBufferRef.current.slice(0, -1);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (barcodeResetTimerRef.current) clearTimeout(barcodeResetTimerRef.current);
+    };
+  }, []);
 
   const updateQuantity = (productId: string, delta: number) => {
     setCart((prev) =>
@@ -206,27 +242,25 @@ const SalesPage = () => {
     <div className="flex h-[calc(100vh-3rem)] gap-5 animate-slide-in">
       {/* Left: Product catalog */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        <div className="flex flex-col gap-2 mb-4 shrink-0 p-2">
-          <div className="relative w-full min-w-0">
-            <Barcode className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <Input
-              className="w-full min-w-0 pl-9 pr-4"
-              placeholder="Scan barcode..."
-              value={barcodeScan}
-              onChange={(e) => setBarcodeScan(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addByBarcode()}
-              autoComplete="off"
-            />
-          </div>
-          <div className="relative w-full min-w-0">
-            <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <Input
-              className="w-full min-w-0 pl-9 pr-4"
-              placeholder="Search items..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+        <div className="relative mb-4 shrink-0 w-full min-w-0 p-2">
+          <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <Input
+            className="w-full min-w-0 pl-9 pr-4"
+            placeholder="Search or scan barcode..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const val = (e.target as HTMLInputElement).value.trim();
+                if (val && /^\d{6,}$/.test(val)) {
+                  e.preventDefault();
+                  addByBarcode(val);
+                  setSearch("");
+                }
+              }
+            }}
+            autoComplete="off"
+          />
         </div>
 
         <div className="flex gap-2 mb-4 overflow-x-auto pb-1 shrink-0">

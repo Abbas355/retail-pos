@@ -20,6 +20,10 @@ const PLURAL_TO_SINGULAR = {
   burgers: "burger",
   anday: "egg",
   ande: "egg",
+  anda: "egg",
+  breads: "bread",
+  fries: "fries",
+  pizzas: "pizza",
 };
 
 /**
