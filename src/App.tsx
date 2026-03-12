@@ -8,6 +8,7 @@ import AppLayout from "@/components/AppLayout";
 import LoginPage from "@/pages/LoginPage";
 import Dashboard from "@/pages/Dashboard";
 import SalesPage from "@/pages/SalesPage";
+import KhataPage from "@/pages/KhataPage";
 import InventoryPage from "@/pages/InventoryPage";
 import PurchasesPage from "@/pages/PurchasesPage";
 import ExpensesPage from "@/pages/ExpensesPage";
@@ -30,6 +31,7 @@ const AppRoutes = () => {
       <Route element={<AppLayout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/sales" element={<SalesPage />} />
+        <Route path="/khata" element={<KhataPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/purchases" element={isAdmin || user?.role === "manager" ? <PurchasesPage /> : <Navigate to="/" replace />} />
         <Route path="/expenses" element={isAdmin || user?.role === "manager" ? <ExpensesPage /> : <Navigate to="/" replace />} />

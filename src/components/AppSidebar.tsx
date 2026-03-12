@@ -2,12 +2,13 @@ import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/AuthContext";
 import {
-  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings, Wallet
+  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings, Wallet, BookOpen
 } from "lucide-react";
 
 const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; roles: string[] }[] = [
   { to: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, roles: ["admin", "manager", "cashier"] },
   { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart, roles: ["admin", "manager", "cashier"] },
+  { to: "/khata", labelKey: "nav.khata", icon: BookOpen, roles: ["admin", "manager", "cashier"] },
   { to: "/inventory", labelKey: "nav.inventory", icon: Package, roles: ["admin", "manager", "cashier"] },
   { to: "/purchases", labelKey: "nav.purchases", icon: TruckIcon, roles: ["admin", "manager"] },
   { to: "/expenses", labelKey: "nav.expenses", icon: Wallet, roles: ["admin", "manager"] },

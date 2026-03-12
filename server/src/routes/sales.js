@@ -38,12 +38,14 @@ router.post("/sync", async (req, res) => {
       const conn = await pool.getConnection();
       try {
         await conn.beginTransaction();
+        const paidAmount = total;
+        const paymentStatus = "paid";
         const insertSql = createdAt
-          ? "INSERT INTO sales (id, total, payment_method, cashier, customer_id, created_at, date) VALUES (?, ?, ?, ?, ?, ?, ?)"
-          : "INSERT INTO sales (id, total, payment_method, cashier, customer_id) VALUES (?, ?, ?, ?, ?)";
+          ? "INSERT INTO sales (id, total, payment_method, cashier, customer_id, created_at, date, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          : "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)";
         const insertParams = createdAt
-          ? [saleId, total, paymentMethod, cashier, customerId, createdAt, createdAt]
-          : [saleId, total, paymentMethod, cashier, customerId];
+          ? [saleId, total, paymentMethod, cashier, customerId, createdAt, createdAt, paidAmount, paymentStatus]
+          : [saleId, total, paymentMethod, cashier, customerId, paidAmount, paymentStatus];
         await conn.execute(insertSql, insertParams);
         for (const it of bodyItems) {
           await conn.execute(
@@ -134,8 +136,9 @@ router.get("/stats", async (req, res) => {
 
 router.get("/", async (_req, res) => {
   try {
+    const colDate = isSqlite ? "date" : "`date`";
     const sales = await query(
-      "SELECT id, total, payment_method, cashier, customer_id, created_at, `date` AS sale_date FROM sales ORDER BY created_at DESC"
+      `SELECT id, total, payment_method, cashier, customer_id, created_at, ${colDate} AS sale_date, paid_amount, payment_status FROM sales ORDER BY created_at DESC`
     );
     if (sales.length === 0) return res.json([]);
     const saleIds = sales.map((s) => s.id);
@@ -162,9 +165,14 @@ router.get("/", async (_req, res) => {
     }
     const result = sales.map((s) => {
       const dateSource = s.sale_date ?? s.created_at;
+      const totalVal = parseFloat(s.total);
+      const paidVal = parseFloat(s.paid_amount ?? s.total ?? 0);
       return {
         id: s.id,
-        total: parseFloat(s.total),
+        total: totalVal,
+        paidAmount: paidVal,
+        paymentStatus: s.payment_status ?? (paidVal >= totalVal ? "paid" : paidVal <= 0 ? "credit" : "partial"),
+        balance: Math.max(0, totalVal - paidVal),
         paymentMethod: s.payment_method,
         cashier: s.cashier,
         customerId: s.customer_id ?? null,
@@ -179,9 +187,17 @@ router.get("/", async (_req, res) => {
   }
 });
 
+function computePaymentStatus(paidAmount, totalAmount) {
+  const paid = parseFloat(paidAmount) || 0;
+  const total = parseFloat(totalAmount) || 0;
+  if (paid >= total) return "paid";
+  if (paid <= 0) return "credit";
+  return "partial";
+}
+
 router.post("/", async (req, res) => {
   try {
-    const { items: bodyItems, total, paymentMethod, cashier, customerId } = req.body;
+    const { items: bodyItems, total, paymentMethod, cashier, customerId, paidAmount: reqPaidAmount } = req.body;
     if (!Array.isArray(bodyItems) || bodyItems.length === 0 || total == null || !paymentMethod || !cashier) {
       return res.status(400).json({ error: "items (array), total, paymentMethod, and cashier are required" });
     }
@@ -192,13 +208,19 @@ router.post("/", async (req, res) => {
       if (it.quantity == null || Number(it.quantity) <= 0) return res.status(400).json({ error: "Each item must have a positive quantity" });
       if (price == null) return res.status(400).json({ error: "Each item must have product.price or price" });
     }
+    const totalVal = parseFloat(total);
+    const paidAmount = reqPaidAmount != null ? parseFloat(reqPaidAmount) : totalVal;
+    const paymentStatus = computePaymentStatus(paidAmount, totalVal);
+    if (paidAmount < 0 || paidAmount > totalVal) {
+      return res.status(400).json({ error: "paidAmount must be between 0 and total" });
+    }
     const saleId = `sale-${Date.now()}`;
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
       await conn.execute(
-        "INSERT INTO sales (id, total, payment_method, cashier, customer_id) VALUES (?, ?, ?, ?, ?)",
-        [saleId, total, paymentMethod, cashier, customerId || null]
+        "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [saleId, total, paymentMethod, cashier, customerId || null, paidAmount, paymentStatus]
       );
       for (const it of bodyItems) {
         const productId = it.product?.id ?? it.productId ?? it.product_id;
@@ -219,14 +241,19 @@ router.post("/", async (req, res) => {
       conn.release();
     }
     const [saleRow] = await query(
-      "SELECT id, total, payment_method, cashier, customer_id, created_at FROM sales WHERE id = ?",
+      "SELECT id, total, payment_method, cashier, customer_id, created_at, paid_amount, payment_status FROM sales WHERE id = ?",
       [saleId]
     );
     const itemRows = await query("SELECT product_id, product_name, unit_price AS price, quantity FROM sale_items WHERE sale_id = ?", [saleId]);
+    const t = parseFloat(saleRow.total);
+    const p = parseFloat(saleRow.paid_amount ?? saleRow.total ?? 0);
     const created = {
       id: saleRow.id,
       items: itemRows.map((r) => ({ productId: r.product_id, productName: r.product_name, price: parseFloat(r.price), quantity: r.quantity })),
-      total: parseFloat(saleRow.total),
+      total: t,
+      paidAmount: p,
+      paymentStatus: saleRow.payment_status ?? computePaymentStatus(p, t),
+      balance: Math.max(0, t - p),
       paymentMethod: saleRow.payment_method,
       customerId: saleRow.customer_id ?? null,
       date: saleRow.created_at ? new Date(saleRow.created_at).toISOString() : null,
@@ -236,6 +263,71 @@ router.post("/", async (req, res) => {
   } catch (err) {
     console.error("Sale create error:", err);
     res.status(500).json({ error: "Failed to create sale" });
+  }
+});
+
+/** POST /api/sales/:id/payments – record a payment against a credit/partial sale */
+router.post("/:id/payments", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, paymentMethod } = req.body;
+    const payAmount = parseFloat(amount);
+    if (!amount || isNaN(payAmount) || payAmount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const pm = (paymentMethod || "cash").toLowerCase() === "card" ? "card" : "cash";
+
+    const sales = await query("SELECT id, total, paid_amount, payment_status FROM sales WHERE id = ?", [id]);
+    if (!sales || sales.length === 0) return res.status(404).json({ error: "Sale not found" });
+    const sale = sales[0];
+    const total = parseFloat(sale.total);
+    const paid = parseFloat(sale.paid_amount ?? 0) || 0;
+    const balance = total - paid;
+    if (balance <= 0) return res.status(400).json({ error: "Sale is already fully paid" });
+    if (payAmount > balance) return res.status(400).json({ error: "amount exceeds outstanding balance" });
+
+    const newPaid = paid + payAmount;
+    const newStatus = newPaid >= total ? "paid" : "partial";
+    const payId = `pay-${Date.now()}`;
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        "INSERT INTO sale_payments (id, sale_id, amount, payment_method, date, created_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
+        [payId, id, payAmount, pm]
+      );
+      await conn.execute(
+        "UPDATE sales SET paid_amount = ?, payment_status = ? WHERE id = ?",
+        [newPaid, newStatus, id]
+      );
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
+
+    const [updated] = await query(
+      "SELECT id, total, paid_amount, payment_status FROM sales WHERE id = ?",
+      [id]
+    );
+    const t = parseFloat(updated.total);
+    const p = parseFloat(updated.paid_amount);
+    res.status(201).json({
+      payment: { id: payId, saleId: id, amount: payAmount, paymentMethod: pm },
+      sale: {
+        id: updated.id,
+        total: t,
+        paidAmount: p,
+        paymentStatus: updated.payment_status,
+        balance: Math.max(0, t - p),
+      },
+    });
+  } catch (err) {
+    console.error("Sale payment error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

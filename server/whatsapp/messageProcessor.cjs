@@ -184,6 +184,19 @@ function cleanVoiceTranscript(body) {
   return s.trim() || body;
 }
 
+/** True if the message means "no more items, complete the bill" (English or Roman Urdu). */
+function looksLikeNoCompleteBill(body) {
+  if (!body || typeof body !== "string") return false;
+  const lower = body.trim().toLowerCase();
+  if (lower === "no" || lower === "nahi" || lower === "nahi bas" || lower === "bas") return true;
+  if (/^nahi\s*(yar\s+)?(bas\s+)?(bill\s+)?(complete|nikal)/i.test(lower)) return true;
+  if (/^nahi\s*(bas\s+)?(bill\s+)?(nikal\s+do|complete\s+(kr\s+)?do)/i.test(lower)) return true;
+  if (/(bas\s+)?bill\s+(complete|nikal)\s*(kr\s+do|karo|kar\s+do)?\s*$/i.test(lower)) return true;
+  if (/\bbill\s+nikal\s+do\s*$/i.test(lower) || /\bbill\s+complete\s+(kr\s+)?do\s*$/i.test(lower)) return true;
+  if (/^(bas\s+)?(bill\s+)?(nikal\s+do|complete\s+(kr\s+)?do)\s*$/i.test(lower)) return true;
+  return false;
+}
+
 /**
  * Extract the exact customer name from the message.
  * Supports: "<name> ko 2 detergent dy do", "2 detergent dy do <name> ko", "<name> ka bill nikal do", "<name> ki payment".
@@ -325,12 +338,13 @@ async function processIncomingMessage(msg, client) {
   }
 
   const bodyUpper = body.trim().toUpperCase();
-  if (bodyUpper === "YES" || bodyUpper === "NO") {
-    const pending = getPendingSale(msg.from);
+  const pending = getPendingSale(msg.from);
+  const isNoOrComplete = bodyUpper === "NO" || looksLikeNoCompleteBill(body);
+  if ((bodyUpper === "YES" || bodyUpper === "NO") || (pending && isNoOrComplete)) {
     if (pending) {
       const state = pending.state || "confirm";
       if (state === "waiting_products") {
-        if (bodyUpper === "NO") {
+        if (bodyUpper === "NO" || looksLikeNoCompleteBill(body)) {
           pendingVoiceSales.delete(msg.from);
           try {
             const resProducts = await fetch(`${API_BASE}/api/products`);
@@ -392,13 +406,13 @@ async function processIncomingMessage(msg, client) {
         return;
       }
       if (state === "add_more") {
-        if (bodyUpper === "YES") {
+        if (bodyUpper === "YES" && !looksLikeNoCompleteBill(body)) {
           pending.state = "waiting_products";
           pending.at = Date.now();
           pendingVoiceSales.set(msg.from, pending);
           await client.sendMessage(msg.from, "Please add the product now (type or send a voice message, e.g. *2 milk 1 coke*).");
           console.log("  → Voice sale: waiting for more products");
-        } else {
+        } else if (bodyUpper === "NO" || looksLikeNoCompleteBill(body)) {
           pendingVoiceSales.delete(msg.from);
           try {
             const resProducts = await fetch(`${API_BASE}/api/products`);
@@ -463,7 +477,7 @@ async function processIncomingMessage(msg, client) {
           pending.at = Date.now();
           pendingVoiceSales.set(msg.from, pending);
           const parts = pending.items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
-          await client.sendMessage(msg.from, `I've added those items to the bill: ${parts}.\n\nDo you want to add more products to this bill? Reply *YES* to add more or *NO* to complete the sale.`);
+          await client.sendMessage(msg.from, `I've added those items to the bill: ${parts}.`);
           console.log("  → Voice sale: confirmed, asking add more");
         } else {
           pendingVoiceSales.delete(msg.from);
@@ -684,17 +698,12 @@ async function processIncomingMessage(msg, client) {
     const bodyLower = (body || "").trim().toLowerCase();
     const looksLikeNewAdd = /\b\w+\s+ko\s+/.test(bodyLower) && /\d+/.test(bodyLower);
     const looksLikeBillClose = /\bbill\s+nikal\b|\bka\s+bill\b|\bbill\s+complete\b|payment\s+(cash|card)\s*(ha|hai|rakhni)?/i.test(bodyLower);
-    if (!looksLikeNewAdd && !looksLikeBillClose) {
-      const bodyUpper = bodyLower.toUpperCase();
-      const yesAddMore = bodyUpper === "YES" || bodyLower === "add more" || bodyLower === "add more products";
-      const noPayNow = bodyUpper === "NO" || bodyLower === "payment" || bodyLower === "pay" || bodyLower === "pay now";
-      if (yesAddMore) {
-        const { customerKey, bill } = billAddMoreOrPayment;
-        const updated = { ...bill, state: "waiting_products", at: Date.now() };
-        setBill(msg.from, customerKey, updated);
-        await client.sendMessage(msg.from, `Please add the products now (e.g. *2 milk 1 bread* or send a voice message).`);
-        return;
-      }
+    const noCustomerInMessage = !getExactCustomerNameFromMessage(body);
+    const completeCurrentBill = looksLikeNoCompleteBill(body) || (looksLikeBillClose && noCustomerInMessage);
+    const bodyUpper = bodyLower.toUpperCase();
+    const yesAddMore = bodyUpper === "YES" || bodyLower === "add more" || bodyLower === "add more products";
+    const noPayNow = bodyUpper === "NO" || bodyLower === "payment" || bodyLower === "pay" || bodyLower === "pay now" || completeCurrentBill;
+    if (!looksLikeNewAdd) {
       if (noPayNow) {
         const { customerKey, bill } = billAddMoreOrPayment;
         const updated = { ...bill, state: "choose_payment", at: Date.now() };
@@ -702,8 +711,28 @@ async function processIncomingMessage(msg, client) {
         await client.sendMessage(msg.from, `What payment method? Reply *cash* or *card*.`);
         return;
       }
-      await client.sendMessage(msg.from, "Reply *YES* to add more products, or *NO* to complete the payment now (then I'll ask for cash/card).");
+      if (!looksLikeBillClose) {
+      if (yesAddMore) {
+        const { customerKey, bill } = billAddMoreOrPayment;
+        const updated = { ...bill, state: "waiting_products", at: Date.now() };
+        setBill(msg.from, customerKey, updated);
+        await client.sendMessage(msg.from, `Please add the products now (e.g. *2 milk 1 bread* or send a voice message).`);
+        return;
+      }
+      // Try parsing as products (voice or text) - add directly without YES
+      const intentCommand = await getIntentFromMessage(body);
+      const newItems = (intentCommand && intentCommand.action === "voice_sale" && intentCommand.items && intentCommand.items.length > 0) ? intentCommand.items : [];
+      if (newItems.length > 0) {
+        const { customerKey, bill } = billAddMoreOrPayment;
+        const updated = { ...bill, items: [...(bill.items || []), ...newItems], state: "add_more_or_payment", at: Date.now() };
+        setBill(msg.from, customerKey, updated);
+        const added = newItems.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+        await client.sendMessage(msg.from, `Added to *${bill.customerName || customerKey.replace(/_/g, " ")}'s* bill: ${added}.\n\nIf you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.`);
+        return;
+      }
+      await client.sendMessage(msg.from, "If you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.");
       return;
+      }
     }
   }
 
@@ -713,10 +742,10 @@ async function processIncomingMessage(msg, client) {
     const newItems = (intentCommand && intentCommand.action === "voice_sale" && intentCommand.items && intentCommand.items.length > 0) ? intentCommand.items : [];
     if (newItems.length > 0) {
       const { customerKey, bill } = billWaiting;
-      const updated = { ...bill, items: [...(bill.items || []), ...newItems], state: "open", at: Date.now() };
+      const updated = { ...bill, items: [...(bill.items || []), ...newItems], state: "add_more_or_payment", at: Date.now() };
       setBill(msg.from, customerKey, updated);
       const added = newItems.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
-      await client.sendMessage(msg.from, `Added to *${bill.customerName || customerKey}'s* bill: ${added}.`);
+      await client.sendMessage(msg.from, `Added to *${bill.customerName || customerKey.replace(/_/g, " ")}'s* bill: ${added}.\n\nIf you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.`);
       return;
     }
     await client.sendMessage(msg.from, "I couldn't understand the products. Send e.g. *2 milk 1 coke*, or reply *NO* to complete the sale without adding more.");
@@ -735,7 +764,7 @@ async function processIncomingMessage(msg, client) {
       pendingWaiting.at = Date.now();
       pendingVoiceSales.set(msg.from, pendingWaiting);
       const added = newItems.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
-      await client.sendMessage(msg.from, `Added to bill: ${added}.\n\nDo you want to add more products? Reply *YES* to add more or *NO* to complete the sale.`);
+      await client.sendMessage(msg.from, `Added to bill: ${added}.\n\nIf you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.`);
       console.log("  → Voice sale: added more items", newItems.length, "total items:", pendingWaiting.items.length);
       return;
     }
@@ -848,6 +877,22 @@ async function processIncomingMessage(msg, client) {
         const list = products.map((p) => `• ${p.name} — $${Number(p.price).toFixed(2)}`).join("\n");
         reply = list;
         console.log(`  → List products: ${products.length} item(s)`);
+      }
+    } else if (command.action === "list_open_bills") {
+      const bills = getBills(msg.from);
+      const entries = Object.entries(bills);
+      if (entries.length === 0) {
+        reply = "No open bills. Add items for a customer (e.g. *Talha ko 2 bread laga do*).";
+        console.log("  → List open bills: 0");
+      } else {
+        const parts = entries.map(([key, bill]) => {
+          const name = (bill && bill.customerName) || key.replace(/_/g, " ");
+          const items = (bill && bill.items) || [];
+          const itemsStr = items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
+          return `• *${name}* – ${itemsStr || "(no items)"}`;
+        });
+        reply = `📋 *Open bills (${entries.length}):*\n\n${parts.join("\n")}`;
+        console.log(`  → List open bills: ${entries.length}`);
       }
     } else if (command.action === "low_stock") {
       const res = await fetch(`${API_BASE}/api/products`);
@@ -1349,10 +1394,10 @@ async function processIncomingMessage(msg, client) {
             }
             bill.items = [...bill.items, ...command.items];
             bill.paymentMethod = bill.paymentMethod || command.paymentMethod || "cash";
-            bill.state = "open";
+            bill.state = "add_more_or_payment";
             setBill(msg.from, customerKey, bill);
             const added = command.items.map((i) => `${i.quantity || 1} ${i.name || "?"}`).join(", ");
-            reply = `Added to *${displayName}'s* bill: ${added}.`;
+            reply = `Added to *${displayName}'s* bill: ${added}.\n\nIf you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.`;
           }
         }
       }
@@ -1400,7 +1445,7 @@ async function processIncomingMessage(msg, client) {
               notFound.push(`${product.name} (only ${product.stock} in stock, asked ${qty})`);
               continue;
             }
-            if (confidence === "exact") {
+            if (confidence === "exact" || confidence === "similar") {
               saleItems.push({
                 product: { id: product.id, name: product.name, price: Number(product.price) },
                 quantity: qty,
@@ -1413,72 +1458,31 @@ async function processIncomingMessage(msg, client) {
               });
             }
           }
-          if (similarForConfirmation.length > 0 && saleItems.length === 0) {
-            const allPendingItems = [
-              ...similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity })),
-              ...notFoundItems.map((n) => ({ name: n.name, quantity: n.quantity })),
-            ];
-            const partsSimilar = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
-            const partsNotFound = notFoundItems.length > 0 ? notFoundItems.map((n) => `${n.quantity} ${n.name}`).join(", ") : "";
-            const parts = notFoundItems.length > 0 ? partsSimilar + ", " + partsNotFound : partsSimilar;
-            pendingVoiceSales.set(msg.from, {
-              items: allPendingItems,
-              paymentMethod,
-              customer: null,
-              cashier,
-              at: Date.now(),
-              state: "confirm",
+          // Add similar matches directly to sale (no confirmation). User can say "no not this product" to cancel before completing.
+          for (const s of similarForConfirmation) {
+            saleItems.push({
+              product: { id: s.product.id, name: s.product.name, price: Number(s.product.price) },
+              quantity: s.quantity,
             });
-            reply = `I found a similar product in inventory: *${similarForConfirmation[0].product.name}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
-            console.log("  → Voice sale: similar product, ask confirmation (all items)", allPendingItems.length, "items:", parts);
-          } else if (notFound.length > 0 && saleItems.length === 0) {
+          }
+          if (saleItems.length === 0 && notFound.length > 0) {
             reply = `Product(s) not found or out of stock: ${notFound.join(", ")}. Try *list products* to see available items.`;
             console.log("  → Voice sale: no matches", notFound);
           } else if (saleItems.length === 0) {
             reply = "No valid items for sale. Specify product names (e.g. Sell 2 detergent, payment cash).";
-          } else if (similarForConfirmation.length > 0 || notFoundItems.length > 0) {
-            const fromExact = saleItems.map((i) => ({ name: i.product.name, quantity: i.quantity }));
-            const fromSimilar = similarForConfirmation.map((s) => ({ name: s.product.name, quantity: s.quantity }));
-            const fromNotFound = notFoundItems.map((n) => ({ name: n.name, quantity: n.quantity }));
-            const allPendingItems = [...fromExact, ...fromSimilar, ...fromNotFound];
-            const partsExact = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
-            const partsSimilar = similarForConfirmation.map((s) => `${s.quantity} ${s.product.name}`).join(", ");
-            const partsNotFound = notFoundItems.map((n) => `${n.quantity} ${n.name}`).join(", ");
-            const parts = [partsExact, partsSimilar, partsNotFound].filter(Boolean).join(", ");
+          } else {
+            const parts = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
             pendingVoiceSales.set(msg.from, {
-              items: allPendingItems,
+              items: saleItems.map((i) => ({ name: i.product.name, quantity: i.quantity })),
               paymentMethod,
               customer: null,
               cashier,
               at: Date.now(),
-              state: "confirm",
+              state: "add_more",
             });
-            reply = `I found a similar product in inventory: *${(similarForConfirmation[0] || {}).product?.name || "item"}*.\n\nDid you mean to sell ${parts}?\n\nReply *YES* to confirm or *NO* to cancel.`;
-            console.log("  → Voice sale: partial similar, ask confirmation (all items)", allPendingItems.length, "items:", parts);
-          } else {
-            const total = saleItems.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
-            const resSale = await fetch(`${API_BASE}/api/sales`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                items: saleItems,
-                total,
-                paymentMethod,
-                cashier,
-                customerId: null,
-              }),
-            });
-            const saleData = await resSale.json().catch(() => ({}));
-            if (resSale.ok) {
-              const saleLabel = saleItems.map((i) => `${i.quantity} ${i.product.name}`).join(", ");
-              pushActionHistory(msg.from, { action: "voice_sale", label: `sell ${saleLabel}`, payload: { saleId: saleData.id } });
-              const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
-              reply = `✅ *Sale completed!*\nTotal: Rs ${total.toFixed(2)}\nPayment: ${paymentMethod}${extra}`;
-              console.log(`  → Voice sale: ${saleItems.length} item(s), Rs ${total}, ${paymentMethod}`);
-            } else {
-              reply = saleData.error || `Sale failed (${resSale.status}).`;
-              console.log("  → Voice sale error:", reply);
-            }
+            const extra = notFound.length > 0 ? `\n(Skipped: ${notFound.join(", ")})` : "";
+            reply = `Added to bill: ${parts}.${extra}\n\nIf you want to add more products to this bill, send voice or text. Otherwise say *NO* to complete the sale.`;
+            console.log("  → Voice sale: added to cart (add_more), items:", saleItems.length);
           }
         }
       }
@@ -1519,13 +1523,14 @@ async function processIncomingMessage(msg, client) {
         "• Roman Urdu: *teen anday do bread ek aquafina bech do cash par* (3 eggs, 2 bread, 1 aquafina)",
         "",
         "*Multiple customer bills (at the same time):*",
+        "• *kitne bills khule hain* / *open bills* – list all open bills and their items",
         "• *Talha ko 3 bread aur 2 aquafina laga do* – add to Talha's bill",
         "• *Ali ko aur 2 milk laga do* – add more to Ali's bill",
         "• *Talha ki payment cash kar do* – close Talha's bill and take cash payment",
         "• *payment cash kar do* / *bill close karo* – close the bill (if only one open, else bot asks which customer)",
         "• *aur 2 bread laga do* – add to the only open bill; if multiple bills open, bot asks which customer",
         "• If unclear, bot will ask: Reply *YES* to confirm or *NO* to cancel",
-        "• After *YES*, bot asks: *Add more products to this bill?* Reply *YES* to add more, then send products. Reply *NO* to complete.",
+        "• After adding items, bot says: *If you want to add more products, send voice or text. Otherwise say NO to complete the sale.* Reply with more items (voice/text) or *NO* to complete.",
         "",
         "*Undo:*",
         "• *undo* or *undo kar do* – undo the last (most recent) command",

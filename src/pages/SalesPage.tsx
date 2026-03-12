@@ -42,6 +42,9 @@ const SalesPage = () => {
   const ALL_ITEMS = "__all__";
   const [categoryFilter, setCategoryFilter] = useState<string>(ALL_ITEMS);
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card">("cash");
+  type PayMode = "full" | "credit" | "partial";
+  const [payMode, setPayMode] = useState<PayMode>("full");
+  const [paidAmountInput, setPaidAmountInput] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<string>("");
   const [receiptSale, setReceiptSale] = useState<Sale | null>(null);
   const [discountType, setDiscountType] = useState<"percent" | "fixed">("percent");
@@ -207,6 +210,21 @@ const SalesPage = () => {
       toast.error("Cart is empty");
       return;
     }
+    if ((payMode === "credit" || payMode === "partial") && !selectedCustomer) {
+      toast.error("Select a customer for credit or partial payment");
+      return;
+    }
+    let paidAmount: number;
+    if (payMode === "full") paidAmount = total;
+    else if (payMode === "credit") paidAmount = 0;
+    else {
+      const parsed = parseFloat(paidAmountInput) || 0;
+      if (parsed <= 0 || parsed > total) {
+        toast.error("Enter a valid amount between 0 and total");
+        return;
+      }
+      paidAmount = parsed;
+    }
     const sale: Sale = {
       id: `sale-${Date.now()}`,
       items: cart,
@@ -216,6 +234,7 @@ const SalesPage = () => {
       date: new Date().toISOString(),
       cashier: user?.name || "Unknown",
       subtotal,
+      paidAmount,
       ...(discountAmount > 0 && { discountAmount }),
     };
     setSales([...sales, sale]);
@@ -223,7 +242,10 @@ const SalesPage = () => {
     setReceiptSale(sale);
     setCart([]);
     setDiscountValue("");
-    toast.success("Sale completed!");
+    setPaidAmountInput("");
+    setPayMode("full");
+    const statusText = paidAmount >= total ? "completed" : paidAmount > 0 ? `partial ($${paidAmount.toFixed(2)} paid, $${(total - paidAmount).toFixed(2)} in khata)` : `credit ($${total.toFixed(2)} in khata)`;
+    toast.success(`Sale ${statusText}!`);
     try {
       await salesApi.create({
         items: cart.map((i) => ({ product: { id: i.product.id, name: i.product.name, price: i.product.price }, quantity: i.quantity })),
@@ -231,8 +253,10 @@ const SalesPage = () => {
         paymentMethod,
         cashier: user?.name || "Unknown",
         customerId: selectedCustomer || undefined,
+        paidAmount,
       });
       queryClient.invalidateQueries({ queryKey: ["sales"] });
+      queryClient.invalidateQueries({ queryKey: ["khata"] });
     } catch {
       /* API save failed (offline etc); localStorage sale still visible in dashboard */
     }
@@ -472,6 +496,56 @@ const SalesPage = () => {
             </Button>
           </div>
 
+          <div className="space-y-2">
+            <Label className="text-sm text-muted-foreground">Payment</Label>
+            <div className="flex gap-2">
+              <Button
+                variant={payMode === "full" ? "default" : "outline"}
+                size="sm"
+                className="flex-1"
+                onClick={() => { setPayMode("full"); setPaidAmountInput(""); }}
+              >
+                Pay now (full)
+              </Button>
+              <Button
+                variant={payMode === "credit" ? "default" : "outline"}
+                size="sm"
+                className="flex-1"
+                onClick={() => { setPayMode("credit"); setPaidAmountInput(""); }}
+                title="Customer will pay later (requires customer)"
+              >
+                Pay later (credit)
+              </Button>
+              <Button
+                variant={payMode === "partial" ? "default" : "outline"}
+                size="sm"
+                className="flex-1"
+                onClick={() => setPayMode("partial")}
+                title="Pay some now, rest in khata (requires customer)"
+              >
+                Partial
+              </Button>
+            </div>
+            {payMode === "partial" && (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="paid-amt" className="text-sm shrink-0">Amount paid now</Label>
+                <Input
+                  id="paid-amt"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  max={total}
+                  placeholder={`0 - ${total.toFixed(2)}`}
+                  value={paidAmountInput}
+                  onChange={(e) => setPaidAmountInput(e.target.value)}
+                />
+              </div>
+            )}
+            {(payMode === "credit" || payMode === "partial") && !selectedCustomer && (
+              <p className="text-xs text-amber-600">Select a customer for credit/partial payment</p>
+            )}
+          </div>
+
           <div className="space-y-2 border-t pt-3">
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>Subtotal</span>
@@ -578,7 +652,12 @@ const SalesPage = () => {
                 <span>${receiptSale.total.toFixed(2)}</span>
               </div>
               <p className="text-center text-muted-foreground">
-                Paid by {receiptSale.paymentMethod} · Cashier: {receiptSale.cashier}
+                {receiptSale.paidAmount != null && receiptSale.paidAmount < receiptSale.total ? (
+                  <>Paid: ${receiptSale.paidAmount.toFixed(2)} · Balance: ${(receiptSale.total - receiptSale.paidAmount).toFixed(2)} in khata</>
+                ) : (
+                  <>Paid by {receiptSale.paymentMethod}</>
+                )}
+                {" · "}Cashier: {receiptSale.cashier}
               </p>
             </div>
           )}

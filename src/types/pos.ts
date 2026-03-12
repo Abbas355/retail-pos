@@ -33,6 +33,8 @@ export interface Sale {
   subtotal?: number;
   /** Discount amount in dollars (optional) */
   discountAmount?: number;
+  /** Amount paid now (khata: 0=credit, partial, or total=full) */
+  paidAmount?: number;
 }
 
 export interface Customer {

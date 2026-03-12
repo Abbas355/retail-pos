@@ -34,6 +34,7 @@ Roman Urdu ADD-TO-BILL phrases (keep "X ko" and "dy do"/"de do"):
 
 Roman Urdu SALE phrases (when NO customer name) – can normalize:
 - sale kr do, sale kar do, bech do, nikal do → "sell" (only when there is no "X ko" pattern)
+- "or" and "aur" between items mean ANOTHER item (like "and"). "2 anday or 2 bread bech do" = TWO items: 2 eggs AND 2 bread. Always transcribe BOTH. Never drop the second item.
 
 Rules:
 1. Preserve customer names and "X ko" exactly. Never drop names.
@@ -45,8 +46,8 @@ Roman Urdu PAYMENT phrases – normalize so payment method is clear:
 - card se, card par, card payment → "payment card" or "pay with card"
 - online payment, bank transfer → "payment card" (use card for POS)
 
-Quantity: If the user says a number word (Roman Urdu/Urdu), write it as a digit so the POS can parse: ek=1, do=2, teen=3, char=4, paanch=5, chhe=6, saat=7, aath=8, nau=9, das=10. E.g. "teen anday do bread" → "3 anday 2 bread" or "3 eggs 2 bread".
-Product names: "anday" = eggs. Keep other product names as spoken. For multiple products in one sentence, keep all (e.g. "3 eggs and 2 bread and 1 aquafina").
+Quantity: If the user says a number word (Roman Urdu/Urdu), write it as a digit: ek=1, do=2, teen=3, char=4, paanch=5, chhe=6, saat=7, aath=8, nau=9, das=10. E.g. "teen anday do bread" → "3 anday 2 bread" or "3 eggs 2 bread".
+Product names: "anday"/"anda" = eggs. Keep other product names as spoken. For multiple products, keep EVERY item: "2 anday or 2 bread" = two items (2 eggs, 2 bread). "Or" and "aur" mean "and" (another item), not either/or.
 
 Roman Urdu DELETE phrases (all mean DELETE PRODUCT FROM INVENTORY) – keep product name and delete intent clear:
 - delete kar do, delete kr do, delete krdo, remove kar do, remove kr do, remove krdo
@@ -63,6 +64,8 @@ Examples:
 - "acha yar najmi ko 2 anday aur 1 bread dy do" → "najmi ko 2 anday aur 1 bread dy do" or "acha yar najmi ko 2 anday aur 1 bread dy do" (MUST include "najmi ko")
 - "umair ko egg sale kar do" → "umair ko egg sale kar do" or "umair ko egg sell do" (MUST include "umair ko")
 - "7 anday bech do" → "sell 7 eggs"
+- "2 anday or 2 bread bech do" → "sell 2 eggs or 2 bread" or "2 anday or 2 bread bech do" (MUST include BOTH items: 2 eggs AND 2 bread)
+- "3 bread or 2 anday bech do" → "sell 3 bread or 2 eggs" (both items required)
 - "2 coke sale kr do" → "sell 2 coke"
 - "3 bread cash par" → "sell 3 bread payment cash"
 - "7 eggs sale kr do aur payment cash rakhni hai" → "sell 7 eggs and set payment method to cash"

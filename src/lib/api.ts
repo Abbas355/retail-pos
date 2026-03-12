@@ -104,7 +104,35 @@ export const salesApi = {
     paymentMethod: "cash" | "card";
     cashier: string;
     customerId?: string;
+    /** Amount paid now. Omit or equal to total = full payment. 0 = credit, else partial */
+    paidAmount?: number;
   }) => fetchApi("/sales", { method: "POST", body: JSON.stringify(data) }),
+  recordPayment: (saleId: string, data: { amount: number; paymentMethod?: "cash" | "card" }) =>
+    fetchApi<{ payment: { id: string; saleId: string; amount: number; paymentMethod: string }; sale: { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number } }>(`/sales/${encodeURIComponent(saleId)}/payments`, { method: "POST", body: JSON.stringify(data) }),
+};
+
+export const khataApi = {
+  listCustomers: () => fetchApi<{ id: string; name: string; phone: string | null; balance: number }[]>("/khata/customers"),
+  getLedger: () =>
+    fetchApi<{
+      saleId: string;
+      customerId: string;
+      customerName: string;
+      items: string;
+      total: number;
+      paidAmount: number;
+      amountDue: number;
+      date: string | null;
+    }[]>("/khata/ledger"),
+  getCustomerLedger: (customerId: string) =>
+    fetchApi<{
+      customer: { id: string; name: string; phone: string | null };
+      balance: number;
+      ledger: Array<
+        | { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number; date: string | null; type: "sale" }
+        | { id: string; saleId: string; amount: number; paymentMethod: string; date: string | null; type: "payment" }
+      >;
+    }>(`/khata/customers/${encodeURIComponent(customerId)}`),
 };
 
 export const purchasesApi = {

@@ -77,6 +77,43 @@ function ensureProductsBarcodeColumn() {
 }
 ensureProductsBarcodeColumn();
 
+/** Ensure sales khata columns (paid_amount, payment_status) exist. */
+function ensureSalesKhataColumns() {
+  try {
+    const info = db.prepare("PRAGMA table_info(sales)").all();
+    const names = info.map((c) => c.name);
+    if (!names.includes("paid_amount")) {
+      db.exec("ALTER TABLE sales ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0");
+      db.exec("UPDATE sales SET paid_amount = total");
+    }
+    if (!names.includes("payment_status")) {
+      db.exec("ALTER TABLE sales ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'paid'");
+    }
+  } catch (e) {
+    if (!/duplicate column|no such column/i.test(e.message)) throw e;
+  }
+}
+ensureSalesKhataColumns();
+
+/** Ensure sale_payments table exists for khata payment history. */
+function ensureSalePaymentsTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS sale_payments (
+    id TEXT PRIMARY KEY,
+    sale_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
+  )`;
+  try {
+    db.exec(sql);
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureSalePaymentsTable();
+
 // Optional: make SQL slightly MySQL-friendly (e.g. NOW() in routes)
 function normalizeSql(sql) {
   return sql.replace(/\bNOW\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");
