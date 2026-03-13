@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getLocalDateString, getDatePartFromApi } from "@/lib/utils";
+import { getLocalDateString, getDatePartFromApi, formatDateTimePK } from "@/lib/utils";
 import type { Sale } from "@/types/pos";
 import {
   BarChart,
@@ -149,14 +149,13 @@ const ReportsPage = () => {
     for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
       allDates.push(getLocalDateString(d));
     }
-    const result = allDates.map((dateStr) => {
+    return allDates.map((dateStr) => {
       const entry = byDate[dateStr] || { date: dateStr, revenue: 0, count: 0 };
       return {
         ...entry,
-        label: new Date(dateStr + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: dateStr.slice(0, 4) !== new Date().getFullYear().toString() ? "2-digit" : undefined }),
+        label: new Date(dateStr + "T12:00:00").toLocaleDateString("en-PK", { timeZone: "Asia/Karachi", month: "short", day: "numeric", year: dateStr.slice(0, 4) !== new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Karachi" }).slice(0, 4) ? "2-digit" : undefined }),
       };
     });
-    return result;
   }, [filteredSales, dateRange]);
 
   const pieChartData = useMemo(() => {
@@ -221,7 +220,7 @@ const ReportsPage = () => {
               .reverse()
               .map((s) => (
                 <TableRow key={s.id}>
-                  <TableCell>{s.date ? new Date(s.date).toLocaleString() : "—"}</TableCell>
+                  <TableCell>{s.date ? formatDateTimePK(s.date) : "—"}</TableCell>
                   <TableCell>
                     {(s.items ?? [])
                       .map((i: any) => `${i.productName ?? i.product?.name ?? "—"} x${i.quantity}`)
@@ -340,23 +339,24 @@ const ReportsPage = () => {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={barChartData}
-                      margin={{ top: 8, right: 8, left: 8, bottom: 8 }}
-                      barCategoryGap={60}
-                      barGap={8}
+                      margin={{ top: 12, right: 16, left: 8, bottom: 8 }}
+                      barCategoryGap="20%"
+                      barGap={4}
                     >
                       <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                      <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
+                      <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={0} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Number(v).toLocaleString()}`} />
                       <RechartsTooltip
-                        formatter={(value: number) => [`$${value.toFixed(2)}`, "Revenue"]}
-                        labelFormatter={(_, payload) => payload[0]?.payload?.date && new Date(payload[0].payload.date).toLocaleDateString()}
+                        formatter={(value: number) => [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, "Revenue"]}
+                        labelFormatter={(_, payload) => payload[0]?.payload?.date && new Date(payload[0].payload.date + "T12:00:00").toLocaleDateString("en-PK", { timeZone: "Asia/Karachi", weekday: "short", month: "short", day: "numeric", year: "numeric" })}
                       />
                       <Bar
                         dataKey="revenue"
                         fill={BAR_COLOR}
                         radius={[4, 4, 0, 0]}
                         name="Revenue"
-                        maxBarSize={32}
+                        barSize={32}
+                        minPointSize={2}
                       />
                     </BarChart>
                   </ResponsiveContainer>

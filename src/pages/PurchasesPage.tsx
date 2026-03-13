@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Plus, Minus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { formatDatePK } from "@/lib/utils";
 
 const PurchasesPage = () => {
   const [products, setProducts] = useLocalStorage<Product[]>("pos_products", SEED_PRODUCTS);
@@ -76,7 +77,7 @@ const PurchasesPage = () => {
               <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">No purchases recorded</TableCell></TableRow>
             ) : purchases.slice().reverse().map((p) => (
               <TableRow key={p.id}>
-                <TableCell>{new Date(p.date).toLocaleDateString()}</TableCell>
+                <TableCell>{formatDatePK(p.date)}</TableCell>
                 <TableCell>{suppliers.find((s) => s.id === p.supplierId)?.name}</TableCell>
                 <TableCell>{p.items.map((i) => `${i.productName} (${i.quantity})`).join(", ")}</TableCell>
                 <TableCell className="text-right font-semibold">${p.total.toFixed(2)}</TableCell>

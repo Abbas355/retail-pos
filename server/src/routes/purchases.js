@@ -43,7 +43,7 @@ router.get("/", async (_req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { supplierId, items: bodyItems, total } = req.body;
+    const { supplierId, items: bodyItems, total, source: reqSource } = req.body;
     if (!supplierId || !Array.isArray(bodyItems) || bodyItems.length === 0 || total == null) {
       return res.status(400).json({ error: "supplierId, items (array), and total are required" });
     }
@@ -53,13 +53,14 @@ router.post("/", async (req, res) => {
       if (it.cost == null) return res.status(400).json({ error: "Each item must have cost" });
     }
     const purchaseId = `pur-${Date.now()}`;
+    const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
     const date = new Date().toISOString().slice(0, 19).replace("T", " ");
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
       await conn.execute(
-        "INSERT INTO purchases (id, supplier_id, total, date) VALUES (?, ?, ?, ?)",
-        [purchaseId, supplierId, total, date]
+        "INSERT INTO purchases (id, supplier_id, total, date, source) VALUES (?, ?, ?, ?, ?)",
+        [purchaseId, supplierId, total, date, source]
       );
       for (const it of bodyItems) {
         const productId = it.productId ?? it.product_id;

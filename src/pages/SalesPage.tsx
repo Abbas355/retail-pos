@@ -6,6 +6,7 @@ import { Product, CartItem, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
 import { customersApi, productsApi, salesApi } from "@/lib/api";
 import { getProductDisplayName } from "@/lib/productTranslation";
+import { formatDateTimePK } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -614,7 +615,7 @@ const SalesPage = () => {
               <div className="text-center">
                 <p className="font-heading text-lg font-bold">RetailPOS</p>
                 <p className="text-muted-foreground">
-                  {new Date(receiptSale.date).toLocaleString()}
+                  {formatDateTimePK(receiptSale.date)}
                 </p>
               </div>
               <div className="border-t pt-2">

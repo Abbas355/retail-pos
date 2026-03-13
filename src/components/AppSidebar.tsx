@@ -2,12 +2,13 @@ import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/context/AuthContext";
 import {
-  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings, Wallet, BookOpen
+  LayoutDashboard, ShoppingCart, Package, TruckIcon, Users, Building2, BarChart3, UserCog, LogOut, ShoppingBag, Settings, Wallet, BookOpen, Activity
 } from "lucide-react";
 
 const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; roles: string[] }[] = [
   { to: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, roles: ["admin", "manager", "cashier"] },
   { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart, roles: ["admin", "manager", "cashier"] },
+  { to: "/activity", labelKey: "nav.activity", icon: Activity, roles: ["admin", "manager", "cashier"] },
   { to: "/khata", labelKey: "nav.khata", icon: BookOpen, roles: ["admin", "manager", "cashier"] },
   { to: "/inventory", labelKey: "nav.inventory", icon: Package, roles: ["admin", "manager", "cashier"] },
   { to: "/purchases", labelKey: "nav.purchases", icon: TruckIcon, roles: ["admin", "manager"] },
@@ -19,12 +20,16 @@ const navKeys: { to: string; labelKey: string; icon: typeof LayoutDashboard; rol
   { to: "/settings", labelKey: "nav.settings", icon: Settings, roles: ["admin", "manager"] },
 ];
 
-const AppSidebar = () => {
+interface AppSidebarProps {
+  onClose?: () => void;
+}
+
+const AppSidebar = ({ onClose }: AppSidebarProps) => {
   const { t, i18n } = useTranslation();
   const { user, logout } = useAuth();
 
   return (
-    <aside className="flex h-screen w-60 flex-col shrink-0 bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
+    <aside className="flex h-screen w-full max-w-[15rem] flex-col shrink-0 bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 flex items-center gap-3 px-5 py-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sidebar-primary">
@@ -59,6 +64,7 @@ const AppSidebar = () => {
                 key={item.to}
                 to={item.to}
                 end={item.to === "/"}
+                onClick={onClose}
                 className={({ isActive }) =>
                   `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                     isActive

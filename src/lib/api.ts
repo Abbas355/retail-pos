@@ -188,3 +188,33 @@ export const syncApi = {
   pull: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/pull", { method: "POST" }),
   push: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/push", { method: "POST" }),
 };
+
+export interface ActivityItem {
+  type:
+    | "sale"
+    | "expense"
+    | "add_customer"
+    | "add_supplier"
+    | "add_product"
+    | "add_purchase"
+    | "payment"
+    | "delete_product"
+    | "delete_customer"
+    | "delete_supplier"
+    | "delete_expense"
+    | "void_sale";
+  id: string;
+  summary: string;
+  amount: number;
+  source: "whatsapp" | "pos";
+  createdAt: string | null;
+  cashier?: string | null;
+}
+export const activityApi = {
+  list: (params?: { limit?: number; source?: "whatsapp" }) => {
+    const search = new URLSearchParams();
+    if (params?.limit != null) search.set("limit", String(Math.min(100, Math.max(1, params.limit))));
+    if (params?.source === "whatsapp") search.set("source", "whatsapp");
+    return fetchApi<ActivityItem[]>(`/activity${search.toString() ? `?${search}` : ""}`);
+  },
+};

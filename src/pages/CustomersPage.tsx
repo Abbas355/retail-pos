@@ -21,6 +21,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Eye, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { formatDateTimePK } from "@/lib/utils";
 
 const emptyCustomer = { name: "", phone: "" };
 
@@ -269,7 +270,7 @@ const CustomersPage = () => {
                       {(s.items ?? []).map((i) => i.productName ?? i.product?.name).filter(Boolean).join(", ") || "—"}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {s.date ? new Date(s.date).toLocaleString() : "—"}
+                      {s.date ? formatDateTimePK(s.date) : "—"}
                     </p>
                   </div>
                   <span className="font-semibold">${Number(s.total).toFixed(2)}</span>

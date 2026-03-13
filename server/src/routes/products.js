@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { query } from "../config/database.js";
+import { logActivityDelete, inferDeleteSource } from "../lib/activityLog.js";
 
 const router = Router();
 
@@ -73,7 +74,7 @@ router.get("/:id", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { name, nameUr, barcode, price, cost, stock, category, lowStockThreshold } = req.body;
+    const { name, nameUr, barcode, price, cost, stock, category, lowStockThreshold, source: reqSource } = req.body;
     if (!name || price == null) return res.status(400).json({ error: "Name and price required" });
     const barcodeVal = barcode != null && String(barcode).trim() !== "" ? String(barcode).trim() : null;
     if (barcodeVal) {
@@ -81,9 +82,10 @@ router.post("/", async (req, res) => {
       if (existing) return res.status(409).json({ error: "A product with this barcode already exists" });
     }
     const id = `p-${Date.now()}`;
+    const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
     await query(
-      "INSERT INTO products (id, name, name_ur, barcode, price, cost, stock, category, low_stock_threshold) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [id, name, nameUr ?? null, barcodeVal, price || 0, cost ?? 0, stock ?? 0, category || "", lowStockThreshold ?? 5]
+      "INSERT INTO products (id, name, name_ur, barcode, price, cost, stock, category, low_stock_threshold, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, name, nameUr ?? null, barcodeVal, price || 0, cost ?? 0, stock ?? 0, category || "", lowStockThreshold ?? 5, source]
     );
     const [row] = await query("SELECT * FROM products WHERE id = ?", [id]);
     res.status(201).json(toProduct(row));
@@ -133,11 +135,22 @@ router.delete("/:id", async (req, res) => {
         error: "Cannot delete product with sales or purchase history. Only products with no history can be removed.",
       });
     }
+    const [prod] = await query("SELECT id, name, price FROM products WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
+    if (!prod) return res.status(404).json({ error: "Product not found" });
     const fromBody = req.body?.deletedBy != null ? String(req.body.deletedBy).trim() : null;
     const fromQuery = req.query?.deletedBy != null ? String(req.query.deletedBy).trim() : null;
     const deletedBy = fromBody || fromQuery || null;
     const deletedByRole =
       req.body?.deletedByRole != null ? String(req.body.deletedByRole).trim() : null;
+    const source = inferDeleteSource(req);
+    await logActivityDelete({
+      type: "delete_product",
+      entityId: prod.id,
+      summary: `Product deleted: ${prod.name || prod.id} – Rs ${Number(prod.price || 0).toLocaleString()}`,
+      amount: Number(prod.price) || 0,
+      source,
+      deletedBy,
+    });
     const result = await query(
       "UPDATE products SET deleted_at = NOW(), deleted_by = ?, deleted_by_role = ? WHERE id = ? AND deleted_at IS NULL",
       [deletedBy || null, deletedByRole || null, req.params.id]

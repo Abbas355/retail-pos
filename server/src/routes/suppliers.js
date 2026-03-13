@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { query } from "../config/database.js";
+import { logActivityDelete, inferDeleteSource } from "../lib/activityLog.js";
 
 const router = Router();
 
@@ -26,16 +27,21 @@ router.get("/:id", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { name, phone, email } = req.body;
+    const { name, phone, email, source: reqSource } = req.body || {};
+    const headerSource = (req.headers["x-source"] || req.headers["X-Source"] || "").toLowerCase().trim();
+    const source = (reqSource && String(reqSource).toLowerCase() === "whatsapp") || headerSource === "whatsapp"
+      ? "whatsapp"
+      : "pos";
     if (!name || typeof name !== "string" || name.trim() === "") {
       return res.status(400).json({ error: "Name required" });
     }
     const id = `s-${Date.now()}`;
-    await query("INSERT INTO suppliers (id, name, phone, email) VALUES (?, ?, ?, ?)", [
+    await query("INSERT INTO suppliers (id, name, phone, email, source) VALUES (?, ?, ?, ?, ?)", [
       id,
       (name || "").trim(),
       (phone != null ? String(phone).trim() : "") || "",
       (email != null ? String(email).trim() : "") || "",
+      source,
     ]);
     const [row] = await query("SELECT id, name, phone, email, created_at FROM suppliers WHERE id = ?", [id]);
     res.status(201).json(row);
@@ -72,10 +78,20 @@ router.put("/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
-    // Support deletedBy from body or query (query is more reliable for DELETE when body is stripped)
+    const [sup] = await query("SELECT id, name, phone, email FROM suppliers WHERE id = ? AND deleted_at IS NULL", [req.params.id]);
+    if (!sup) return res.status(404).json({ error: "Supplier not found" });
     const fromBody = req.body?.deletedBy != null ? String(req.body.deletedBy).trim() : null;
     const fromQuery = req.query?.deletedBy != null ? String(req.query.deletedBy).trim() : null;
     const deletedBy = fromBody || fromQuery || null;
+    const source = inferDeleteSource(req);
+    await logActivityDelete({
+      type: "delete_supplier",
+      entityId: sup.id,
+      summary: `Supplier deleted: ${sup.name || sup.id}${sup.phone || sup.email ? ` – ${sup.phone || sup.email}` : ""}`,
+      amount: 0,
+      source,
+      deletedBy,
+    });
     const result = await query(
       "UPDATE suppliers SET deleted_at = NOW(), deleted_by = ? WHERE id = ? AND deleted_at IS NULL",
       [deletedBy || null, req.params.id]

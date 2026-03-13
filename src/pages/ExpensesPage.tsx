@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/settings";
+import { formatDatePK } from "@/lib/utils";
 
 const DEFAULT_CATEGORIES = ["Rent", "Utilities", "Salaries", "Supplies", "Maintenance", "Other"];
 
@@ -117,7 +118,7 @@ const ExpensesPage = () => {
             ) : (
               expenses.map((e) => (
                 <TableRow key={e.id}>
-                  <TableCell>{new Date(e.date).toLocaleDateString()}</TableCell>
+                  <TableCell>{formatDatePK(e.date)}</TableCell>
                   <TableCell>{e.category}</TableCell>
                   <TableCell className="max-w-[200px] truncate">{e.description || "—"}</TableCell>
                   <TableCell className="text-right font-medium">{formatCurrency(e.amount)}</TableCell>

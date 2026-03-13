@@ -17,6 +17,7 @@ import SuppliersPage from "@/pages/SuppliersPage";
 import ReportsPage from "@/pages/ReportsPage";
 import UsersPage from "@/pages/UsersPage";
 import SettingsPage from "@/pages/SettingsPage";
+import ActivityPage from "@/pages/ActivityPage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -31,6 +32,7 @@ const AppRoutes = () => {
       <Route element={<AppLayout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/sales" element={<SalesPage />} />
+        <Route path="/activity" element={<ActivityPage />} />
         <Route path="/khata" element={<KhataPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/purchases" element={isAdmin || user?.role === "manager" ? <PurchasesPage /> : <Navigate to="/" replace />} />

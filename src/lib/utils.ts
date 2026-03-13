@@ -5,18 +5,31 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Returns local date as YYYY-MM-DD (for filtering/display by calendar date, not UTC). */
+/** Pakistan timezone (Asia/Karachi, UTC+5) – used for all date/time display and "today" logic. */
+export const TIMEZONE_PK = "Asia/Karachi";
+
+/** Returns date as YYYY-MM-DD in Pakistan time (for filtering, "today" logic). */
 export function getLocalDateString(d: Date | string): string {
   const date = typeof d === "string" ? new Date(d) : d;
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return date.toLocaleDateString("en-CA", { timeZone: TIMEZONE_PK }); // en-CA → YYYY-MM-DD
 }
 
-/** Extracts YYYY-MM-DD from API date (ISO string) to avoid timezone shifting. Use for grouping sales by stored date. */
+/** Extracts YYYY-MM-DD from API date (ISO string) in Pakistan time. Use for grouping sales by stored date. */
 export function getDatePartFromApi(d: Date | string | null | undefined): string {
   if (d == null) return "";
-  if (typeof d === "string" && d.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10);
   return getLocalDateString(d);
+}
+
+/** Format date/time for display in Pakistan time. */
+export function formatDateTimePK(iso: string | Date | null | undefined, opts?: Intl.DateTimeFormatOptions): string {
+  if (iso == null) return "—";
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return d.toLocaleString("en-PK", { timeZone: TIMEZONE_PK, ...opts });
+}
+
+/** Format date only (no time) in Pakistan time. */
+export function formatDatePK(iso: string | Date | null | undefined): string {
+  if (iso == null) return "—";
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return d.toLocaleDateString("en-PK", { timeZone: TIMEZONE_PK });
 }

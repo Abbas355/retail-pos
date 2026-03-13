@@ -242,7 +242,7 @@ async function ensureCustomerExists(apiBase, exactName) {
     const createRes = await fetch(`${apiBase}/api/customers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: nameToStore, phone: "" }),
+      body: JSON.stringify({ name: nameToStore, phone: "", source: "whatsapp" }),
     });
     const data = await createRes.json().catch(() => ({}));
     if (createRes.ok && data.id) {
@@ -384,6 +384,7 @@ async function processIncomingMessage(msg, client) {
                 paymentMethod: pending.paymentMethod || "cash",
                 cashier: pending.cashier || "WhatsApp User",
                 customerId: null,
+                source: "whatsapp",
               }),
             });
             const saleData = await resSale.json().catch(() => ({}));
@@ -452,6 +453,7 @@ async function processIncomingMessage(msg, client) {
                 paymentMethod: pending.paymentMethod || "cash",
                 cashier: pending.cashier || "WhatsApp User",
                 customerId: null,
+                source: "whatsapp",
               }),
             });
             const saleData = await resSale.json().catch(() => ({}));
@@ -581,6 +583,7 @@ async function processIncomingMessage(msg, client) {
               paymentMethod: bill.paymentMethod || "cash",
               cashier: from || "WhatsApp User",
               customerId: customerId || undefined,
+              source: "whatsapp",
             }),
           });
           const saleData = await resSale.json().catch(() => ({}));
@@ -672,6 +675,7 @@ async function processIncomingMessage(msg, client) {
             paymentMethod,
             cashier: from || "WhatsApp User",
             customerId: customerId || undefined,
+            source: "whatsapp",
           }),
         });
         const saleData = await resSale.json().catch(() => ({}));
@@ -818,22 +822,24 @@ async function processIncomingMessage(msg, client) {
           reply = "No command available to undo.";
           if (entry.action) pushActionHistory(msg.from, entry);
         } else {
+          const undoHeaders = { "X-Source": "whatsapp" };
+          const deletedByParam = `deletedBy=${encodeURIComponent(from || "WhatsApp User")}`;
           let ok = false;
           try {
             if (entry.action === "add_expense" && entry.payload?.expenseId) {
-              const res = await fetch(`${API_BASE}/api/expenses/${encodeURIComponent(entry.payload.expenseId)}`, { method: "DELETE" });
+              const res = await fetch(`${API_BASE}/api/expenses/${encodeURIComponent(entry.payload.expenseId)}?${deletedByParam}`, { method: "DELETE", headers: undoHeaders });
               ok = res.status === 204;
             } else if (entry.action === "add_product" && entry.payload?.productId) {
-              const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(entry.payload.productId)}`, { method: "DELETE" });
+              const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(entry.payload.productId)}?${deletedByParam}`, { method: "DELETE", headers: undoHeaders });
               ok = res.ok || res.status === 204;
             } else if (entry.action === "add_customer" && entry.payload?.customerId) {
-              const res = await fetch(`${API_BASE}/api/customers/${encodeURIComponent(entry.payload.customerId)}?deletedBy=${encodeURIComponent(from || "WhatsApp")}`, { method: "DELETE" });
+              const res = await fetch(`${API_BASE}/api/customers/${encodeURIComponent(entry.payload.customerId)}?${deletedByParam}`, { method: "DELETE", headers: undoHeaders });
               ok = res.ok || res.status === 204;
             } else if (entry.action === "add_supplier" && entry.payload?.supplierId) {
-              const res = await fetch(`${API_BASE}/api/suppliers/${encodeURIComponent(entry.payload.supplierId)}?deletedBy=${encodeURIComponent(from || "WhatsApp")}`, { method: "DELETE" });
+              const res = await fetch(`${API_BASE}/api/suppliers/${encodeURIComponent(entry.payload.supplierId)}?${deletedByParam}`, { method: "DELETE", headers: undoHeaders });
               ok = res.ok || res.status === 204;
             } else if (entry.action === "voice_sale" && entry.payload?.saleId) {
-              const res = await fetch(`${API_BASE}/api/sales/${encodeURIComponent(entry.payload.saleId)}`, { method: "DELETE" });
+              const res = await fetch(`${API_BASE}/api/sales/${encodeURIComponent(entry.payload.saleId)}?${deletedByParam}`, { method: "DELETE", headers: undoHeaders });
               ok = res.status === 204;
             }
           } catch (err) {
@@ -861,6 +867,7 @@ async function processIncomingMessage(msg, client) {
           stock: 0,
           category: "",
           lowStockThreshold: command.threshold ?? 5,
+          source: "whatsapp",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1186,6 +1193,7 @@ async function processIncomingMessage(msg, client) {
               amount,
               category,
               description: description.slice(0, 500),
+              source: "whatsapp",
             }),
           });
           const expData = await res.json().catch(() => ({}));
@@ -1216,7 +1224,7 @@ async function processIncomingMessage(msg, client) {
         const res = await fetch(`${API_BASE}/api/customers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, phone }),
+          body: JSON.stringify({ name, phone, source: "whatsapp" }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
@@ -1241,8 +1249,8 @@ async function processIncomingMessage(msg, client) {
       } else {
         const res = await fetch(`${API_BASE}/api/suppliers`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, phone: phone || undefined, email: email || undefined }),
+          headers: { "Content-Type": "application/json", "X-Source": "whatsapp" },
+          body: JSON.stringify({ name, phone: phone || undefined, email: email || undefined, source: "whatsapp" }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
@@ -1257,8 +1265,10 @@ async function processIncomingMessage(msg, client) {
           console.log("  → Error:", reply);
         }
       }
-    } else if (command.action === "sales_report_today") {
-      const statsUrl = `${API_BASE}/api/sales/stats?period=today`;
+    } else if (command.action === "sales_report_today" || command.action === "sales_report_yesterday" || command.action === "sales_report_day_before_yesterday") {
+      const periodMap = { sales_report_today: "today", sales_report_yesterday: "yesterday", sales_report_day_before_yesterday: "day_before_yesterday" };
+      const period = periodMap[command.action];
+      const statsUrl = `${API_BASE}/api/sales/stats?period=${period}`;
       let res;
       try {
         res = await fetch(statsUrl);
@@ -1272,29 +1282,35 @@ async function processIncomingMessage(msg, client) {
         if (!res.ok) {
           reply = data.error || `Could not fetch sales (${res.status}). Is the POS server running?`;
           console.log("  → Sales report: error", res.status, data.error || "");
-      } else {
-        const fmt = (n) => Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-        const orders = data.salesCount ?? 0;
-        const revenue = data.totalRevenue ?? 0;
-        const cash = (data.paymentBreakdown && data.paymentBreakdown.cash) ?? 0;
-        const card = (data.paymentBreakdown && data.paymentBreakdown.card) ?? 0;
-        const top = data.topProduct;
+        } else {
+          const fmt = (n) => Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+          const orders = data.salesCount ?? 0;
+          const revenue = data.totalRevenue ?? 0;
+          const profit = data.totalProfit ?? 0;
+          const cash = (data.paymentBreakdown && data.paymentBreakdown.cash) ?? 0;
+          const card = (data.paymentBreakdown && data.paymentBreakdown.card) ?? 0;
+          const top = data.topProduct;
+          const dateLabel = data.reportDateLabel || data.reportDate || (period === "today" ? "Today" : period === "yesterday" ? "Yesterday" : "Day before yesterday");
 
-        const parts = [
-          "📊 *Today's Sales Report*",
-          "",
-          `Total Orders: ${orders}`,
-          `Total Revenue: Rs ${fmt(revenue)}`,
-          "",
-        ];
-        if (top && top.productName) {
-          parts.push("Top Product:", top.productName, `Units Sold: ${top.quantitySold || 0}`, `Revenue: Rs ${fmt(top.revenue)}`, "");
+          const titleMap = { today: "Today's", yesterday: "Yesterday's (Kal)", day_before_yesterday: "Day Before Yesterday's (Parso)" };
+          const title = titleMap[period] || "Sales";
+          const parts = [
+            `📊 *${title} Sales Report*`,
+            `*Date: ${dateLabel}*`,
+            "",
+            `*Total Revenue:* Rs ${fmt(revenue)}`,
+            `*Total Profit:* Rs ${fmt(profit)}`,
+            `Total Orders: ${orders}`,
+            "",
+          ];
+          if (top && top.productName) {
+            parts.push("*Most Sold:*", `${top.productName} — ${top.quantitySold || 0} units (Rs ${fmt(top.revenue)})`, "");
+          }
+          parts.push("Payment:", `Cash Rs ${fmt(cash)} | Card Rs ${fmt(card)}`);
+          reply = parts.join("\n");
+          console.log(`  → Sales report (${period}): ${orders} orders, Rs ${revenue} revenue, Rs ${profit} profit`);
         }
-        parts.push("Payment Breakdown:", `Cash: Rs ${fmt(cash)}`, `Card: Rs ${fmt(card)}`);
-        reply = parts.join("\n");
-        console.log(`  → Sales report: ${orders} orders, Rs ${revenue} revenue`);
       }
-    }
     } else if (command.action === "khata_list_pending") {
       try {
         const res = await fetch(`${API_BASE}/api/khata/ledger`);
@@ -1421,6 +1437,7 @@ async function processIncomingMessage(msg, client) {
                       paymentMethod: bill.paymentMethod || "cash",
                       cashier: from || "WhatsApp User",
                       customerId: customerId || undefined,
+                      source: "whatsapp",
                     }),
                   });
                   const saleData = await resSale.json().catch(() => ({}));
@@ -1588,7 +1605,9 @@ async function processIncomingMessage(msg, client) {
         "• Voice: *acha yar mera bijli ka bill add kr do 7000*",
         "",
         "*Sales:*",
-        "• *give me today's sales* – sales report (orders, revenue, top product, payment breakdown)",
+        "• *give me today's sales* – today's report (date, revenue, profit, top product)",
+        "• *mujhy kal ki sale batao* – yesterday's (kal) report",
+        "• *parso ki sale batao* – day before yesterday's (parso) report",
         "• *show sales report today* – same as above",
         "",
         "*Khata (In-Out / Pending Payments):*",

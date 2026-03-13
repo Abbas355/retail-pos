@@ -11,6 +11,7 @@ import expensesRoutes from "./routes/expenses.js";
 import usersRoutes from "./routes/users.js";
 import permissionsRoutes from "./routes/permissions.js";
 import syncRoutes from "./routes/sync.js";
+import activityRoutes from "./routes/activity.js";
 import { query } from "./config/database.js";
 
 const app = express();
@@ -28,6 +29,7 @@ app.use("/api/expenses", expensesRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/permissions", permissionsRoutes);
 app.use("/api/sync", syncRoutes);
+app.use("/api/activity", activityRoutes);
 
 /** When using SQLite and MySQL env is set, pull MySQL → SQLite on startup so desktop shows MySQL data. */
 async function syncFromMysqlIfConfigured() {
@@ -61,9 +63,54 @@ async function ensureDefaultUserIfSqlite() {
   }
 }
 
+/** Ensure activity_log table exists (for delete/undo audit). */
+async function ensureActivityLogTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS activity_log (
+      id VARCHAR(64) PRIMARY KEY,
+      type VARCHAR(32) NOT NULL,
+      entity_id VARCHAR(64),
+      summary VARCHAR(512),
+      amount DECIMAL(12,2) DEFAULT 0,
+      source VARCHAR(20) DEFAULT 'pos',
+      deleted_by VARCHAR(128),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureActivityLogTableMysql:", e.message);
+  }
+}
+
+/** Ensure source column exists on MySQL tables (for Activity WhatsApp filter). */
+async function ensureSourceColumnsMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    const tables = [
+      { table: "suppliers", col: "source" },
+      { table: "customers", col: "source" },
+      { table: "products", col: "source" },
+      { table: "purchases", col: "source" },
+      { table: "sale_payments", col: "source" },
+    ];
+    for (const { table, col } of tables) {
+      try {
+        await query(`ALTER TABLE ${table} ADD COLUMN ${col} VARCHAR(20) NULL`);
+        console.log(`Added ${col} to ${table}`);
+      } catch (e) {
+        if (!/Duplicate column name/i.test(e.message)) console.warn(`${table}.${col}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.warn("ensureSourceColumnsMysql:", e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server listening on port ${PORT}`);
   await ensureDefaultUserIfSqlite();
+  await ensureActivityLogTableMysql();
+  await ensureSourceColumnsMysql();
   await syncFromMysqlIfConfigured();
 });

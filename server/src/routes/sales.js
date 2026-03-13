@@ -1,5 +1,6 @@
 import { Router } from "express";
 import pool, { query } from "../config/database.js";
+import { logActivityDelete, inferDeleteSource } from "../lib/activityLog.js";
 
 const router = Router();
 const isSqlite = (process.env.DB_TYPE || "mysql").toLowerCase() === "sqlite";
@@ -40,12 +41,13 @@ router.post("/sync", async (req, res) => {
         await conn.beginTransaction();
         const paidAmount = total;
         const paymentStatus = "paid";
+        const source = "pos";
         const insertSql = createdAt
-          ? "INSERT INTO sales (id, total, payment_method, cashier, customer_id, created_at, date, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-          : "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)";
+          ? "INSERT INTO sales (id, total, payment_method, cashier, customer_id, created_at, date, paid_amount, payment_status, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          : "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         const insertParams = createdAt
-          ? [saleId, total, paymentMethod, cashier, customerId, createdAt, createdAt, paidAmount, paymentStatus]
-          : [saleId, total, paymentMethod, cashier, customerId, paidAmount, paymentStatus];
+          ? [saleId, total, paymentMethod, cashier, customerId, createdAt, createdAt, paidAmount, paymentStatus, source]
+          : [saleId, total, paymentMethod, cashier, customerId, paidAmount, paymentStatus, source];
         await conn.execute(insertSql, insertParams);
         for (const it of bodyItems) {
           await conn.execute(
@@ -70,20 +72,33 @@ router.post("/sync", async (req, res) => {
   }
 });
 
-/** GET /api/sales/stats?period=today – today's sales report */
+/** Get YYYY-MM-DD for a period in Pakistan time (Asia/Karachi). */
+function getTargetDatePK(period) {
+  const now = new Date();
+  const daysBack = period === "yesterday" ? 1 : period === "day_before_yesterday" ? 2 : 0;
+  const d = new Date(now);
+  d.setDate(d.getDate() - daysBack);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Karachi" });
+}
+
+/** GET /api/sales/stats?period=today|yesterday|day_before_yesterday – sales report for that date */
 router.get("/stats", async (req, res) => {
   try {
     const period = (req.query.period || "today").toLowerCase();
-    if (period !== "today") {
-      return res.status(400).json({ error: "Only period=today is supported" });
+    const allowed = ["today", "yesterday", "day_before_yesterday"];
+    if (!allowed.includes(period)) {
+      return res.status(400).json({ error: `period must be one of: ${allowed.join(", ")}` });
     }
 
+    const targetDate = getTargetDatePK(period);
     const dateCond = isSqlite
-      ? "date(s.created_at) = date('now', 'localtime')"
-      : "DATE(s.created_at) = CURDATE()";
+      ? "date(s.created_at) = ?"
+      : "DATE(s.created_at) = ?";
+    const params = [targetDate];
 
     const sales = await query(
-      `SELECT s.id, s.total, s.payment_method FROM sales s WHERE ${dateCond} ORDER BY s.created_at DESC`
+      `SELECT s.id, s.total, s.payment_method FROM sales s WHERE ${dateCond} ORDER BY s.created_at DESC`,
+      params
     );
 
     const salesCount = sales.length;
@@ -98,6 +113,7 @@ router.get("/stats", async (req, res) => {
     }
 
     let topProduct = null;
+    let totalProfit = 0;
     if (salesCount > 0) {
       const saleIds = sales.map((s) => s.id);
       const placeholders = saleIds.map(() => "?").join(",");
@@ -107,7 +123,7 @@ router.get("/stats", async (req, res) => {
          FROM sale_items si
          WHERE si.sale_id IN (${placeholders})
          GROUP BY si.product_id, si.product_name
-         ORDER BY rev DESC LIMIT 1`,
+         ORDER BY qty DESC, rev DESC LIMIT 1`,
         saleIds
       );
       if (topRows && topRows.length > 0) {
@@ -120,13 +136,29 @@ router.get("/stats", async (req, res) => {
           percentageOfRevenue: totalRevenue > 0 ? Math.round((parseFloat(r.rev) / totalRevenue) * 100) : 0,
         };
       }
+      const costRows = await query(
+        `SELECT si.unit_price, si.quantity, COALESCE(p.cost, 0) as cost
+         FROM sale_items si
+         LEFT JOIN products p ON p.id = si.product_id AND p.deleted_at IS NULL
+         WHERE si.sale_id IN (${placeholders})`,
+        saleIds
+      );
+      for (const row of costRows || []) {
+        const rev = parseFloat(row.unit_price || 0) * (parseInt(row.quantity, 10) || 0);
+        const cost = parseFloat(row.cost || 0) * (parseInt(row.quantity, 10) || 0);
+        totalProfit += rev - cost;
+      }
     }
 
+    const reportDateLabel = new Date(targetDate + "T12:00:00").toLocaleDateString("en-PK", { timeZone: "Asia/Karachi", weekday: "short", month: "short", day: "numeric", year: "numeric" });
     res.json({
       salesCount,
       totalRevenue,
+      totalProfit,
       topProduct,
       paymentBreakdown: { cash: byMethod.cash, card: byMethod.card },
+      reportDate: targetDate,
+      reportDateLabel,
     });
   } catch (err) {
     console.error("Sales stats error:", err);
@@ -138,7 +170,7 @@ router.get("/", async (_req, res) => {
   try {
     const colDate = isSqlite ? "date" : "`date`";
     const sales = await query(
-      `SELECT id, total, payment_method, cashier, customer_id, created_at, ${colDate} AS sale_date, paid_amount, payment_status FROM sales ORDER BY created_at DESC`
+      `SELECT id, total, payment_method, cashier, customer_id, created_at, ${colDate} AS sale_date, paid_amount, payment_status, COALESCE(source, 'pos') AS source FROM sales ORDER BY created_at DESC`
     );
     if (sales.length === 0) return res.json([]);
     const saleIds = sales.map((s) => s.id);
@@ -178,6 +210,7 @@ router.get("/", async (_req, res) => {
         customerId: s.customer_id ?? null,
         date: dateSource ? new Date(dateSource).toISOString() : null,
         items: itemsBySale[s.id] || [],
+        source: s.source && String(s.source).toLowerCase() === "whatsapp" ? "whatsapp" : "pos",
       };
     });
     res.json(result);
@@ -197,7 +230,7 @@ function computePaymentStatus(paidAmount, totalAmount) {
 
 router.post("/", async (req, res) => {
   try {
-    const { items: bodyItems, total, paymentMethod, cashier, customerId, paidAmount: reqPaidAmount } = req.body;
+    const { items: bodyItems, total, paymentMethod, cashier, customerId, paidAmount: reqPaidAmount, source: reqSource } = req.body;
     if (!Array.isArray(bodyItems) || bodyItems.length === 0 || total == null || !paymentMethod || !cashier) {
       return res.status(400).json({ error: "items (array), total, paymentMethod, and cashier are required" });
     }
@@ -215,12 +248,13 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "paidAmount must be between 0 and total" });
     }
     const saleId = `sale-${Date.now()}`;
+    const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
       await conn.execute(
-        "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [saleId, total, paymentMethod, cashier, customerId || null, paidAmount, paymentStatus]
+        "INSERT INTO sales (id, total, payment_method, cashier, customer_id, paid_amount, payment_status, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [saleId, total, paymentMethod, cashier, customerId || null, paidAmount, paymentStatus, source]
       );
       for (const it of bodyItems) {
         const productId = it.product?.id ?? it.productId ?? it.product_id;
@@ -270,7 +304,7 @@ router.post("/", async (req, res) => {
 router.post("/:id/payments", async (req, res) => {
   try {
     const { id } = req.params;
-    const { amount, paymentMethod } = req.body;
+    const { amount, paymentMethod, source: reqSource } = req.body;
     const payAmount = parseFloat(amount);
     if (!amount || isNaN(payAmount) || payAmount <= 0) {
       return res.status(400).json({ error: "amount must be a positive number" });
@@ -289,13 +323,14 @@ router.post("/:id/payments", async (req, res) => {
     const newPaid = paid + payAmount;
     const newStatus = newPaid >= total ? "paid" : "partial";
     const payId = `pay-${Date.now()}`;
+    const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
 
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
       await conn.execute(
-        "INSERT INTO sale_payments (id, sale_id, amount, payment_method, date, created_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
-        [payId, id, payAmount, pm]
+        "INSERT INTO sale_payments (id, sale_id, amount, payment_method, date, created_at, source) VALUES (?, ?, ?, ?, NOW(), NOW(), ?)",
+        [payId, id, payAmount, pm, source]
       );
       await conn.execute(
         "UPDATE sales SET paid_amount = ?, payment_status = ? WHERE id = ?",
@@ -335,13 +370,24 @@ router.post("/:id/payments", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const [sale] = await query("SELECT id, total, payment_method, cashier, source FROM sales WHERE id = ?", [id]);
     const items = await query(
       "SELECT product_id, quantity FROM sale_items WHERE sale_id = ?",
       [id]
     );
-    if (!items || items.length === 0) {
+    if (!sale || !items || items.length === 0) {
       return res.status(404).json({ error: "Sale not found or already voided" });
     }
+    const source = inferDeleteSource(req);
+    const deletedBy = req.body?.deletedBy ?? req.query?.deletedBy ?? sale.cashier ?? null;
+    await logActivityDelete({
+      type: "void_sale",
+      entityId: id,
+      summary: `Sale voided: Rs ${Number(sale.total || 0).toLocaleString()} (${sale.payment_method || "cash"})`,
+      amount: Number(sale.total) || 0,
+      source,
+      deletedBy: deletedBy ? String(deletedBy).trim() : null,
+    });
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();

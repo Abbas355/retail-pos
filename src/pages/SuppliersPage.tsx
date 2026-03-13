@@ -20,6 +20,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Pencil, Trash2, Eye } from "lucide-react";
 import { toast } from "sonner";
+import { formatDateTimePK } from "@/lib/utils";
 
 const emptySupplier = { name: "", phone: "", email: "" };
 
@@ -292,7 +293,7 @@ const SuppliersPage = () => {
                         .join(", ") || "—"}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {p.date ? new Date(p.date).toLocaleString() : "—"}
+                      {p.date ? formatDateTimePK(p.date) : "—"}
                     </p>
                   </div>
                   <span className="font-semibold">${Number(p.total).toFixed(2)}</span>

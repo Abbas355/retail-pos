@@ -5,14 +5,17 @@
 
 const CATEGORIES = ["Rent", "Utilities", "Salaries", "Supplies", "Maintenance", "Other"];
 
-/** Strip filler words from raw description. */
+/** Strip leading filler/possessive words so description is neutral (e.g. "mera bijli ka bill" → "bijli ka bill"). */
 function cleanDescription(raw) {
   if (!raw || typeof raw !== "string") return "";
-  return raw
-    .trim()
-    .replace(/^(?:acha\s+yar\s+|oy\s+|yar\s+|mera\s+|mere\s+|the\s+)/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let s = raw.trim().replace(/\s+/g, " ").trim();
+  // Strip common prefixes: fillers (acha yar, oy, yar) and possessives (mera, meri, mere, hamara, etc.)
+  const leadingFiller =
+    /^(?:acha\s+yar\s+|oy\s+|yar\s+|mera\s+|meri\s+|mere\s+|hamara\s+|hamari\s+|hamare\s+|tumhara\s+|tumhari\s+|the\s+)/i;
+  while (leadingFiller.test(s)) {
+    s = s.replace(leadingFiller, "").trim();
+  }
+  return s;
 }
 
 /**
@@ -40,12 +43,11 @@ function classifyExpenseCategory(rawDescription) {
     return { category: "Rent", description: desc, confidence: "high" };
   }
 
-  // Salaries: staff, employee, salary, tankhwa, mazdoor
+  // Salaries: staff, employee, salary, tankhwa, mazdoor – category and description are same ("Salaries")
   if (
     /\bsalary\b|\bsalaries\b|\btankhwa\b|\bmazdoor\b|\bstaff\b|\bemployee\b|\bemployees\b|\bworker\b|\bworkers\b/i.test(lower)
   ) {
-    const desc = cleaned || "Salary";
-    return { category: "Salaries", description: desc, confidence: "high" };
+    return { category: "Salaries", description: "Salaries", confidence: "high" };
   }
 
   // Supplies: packing, bags, boxes, stationery

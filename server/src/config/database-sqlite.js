@@ -114,6 +114,48 @@ function ensureSalePaymentsTable() {
 }
 ensureSalePaymentsTable();
 
+/** Ensure source column on all audit-relevant tables (whatsapp vs pos). */
+function ensureSourceColumns() {
+  const alters = [
+    "ALTER TABLE sales ADD COLUMN source TEXT",
+    "ALTER TABLE expenses ADD COLUMN source TEXT",
+    "ALTER TABLE customers ADD COLUMN source TEXT",
+    "ALTER TABLE suppliers ADD COLUMN source TEXT",
+    "ALTER TABLE products ADD COLUMN source TEXT",
+    "ALTER TABLE purchases ADD COLUMN source TEXT",
+    "ALTER TABLE sale_payments ADD COLUMN source TEXT",
+  ];
+  for (const sql of alters) {
+    try {
+      db.exec(sql);
+    } catch (e) {
+      if (!/duplicate column name/i.test(e.message)) throw e;
+    }
+  }
+}
+ensureSourceColumns();
+
+/** Ensure activity_log table exists for delete/undo audit events. */
+function ensureActivityLogTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    entity_id TEXT,
+    summary TEXT,
+    amount REAL DEFAULT 0,
+    source TEXT DEFAULT 'pos',
+    deleted_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureActivityLogTable();
+
 // Optional: make SQL slightly MySQL-friendly (e.g. NOW() in routes)
 function normalizeSql(sql) {
   return sql.replace(/\bNOW\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");

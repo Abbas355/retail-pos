@@ -18,11 +18,13 @@ Allowed tools (ONLY these – do not invent others):
 9. add_customer_help – User asks how to add a customer. No extra params.
 10. add_supplier – Add a supplier. Needs: name (string). Optional: phone (string), email (string).
 11. add_supplier_help – User asks how to add a supplier, supplier insertion method, etc. No extra params.
-12. sales_report_today – User asks for today's sales, revenue, sales report, top selling product today. No extra params.
-13. list_open_bills – User asks for open bills, list of customers with open bills (e.g. "kitne bills khule hain", "open bills", "list bills", "khule hue bills bata do"). No extra params.
-15. khata_list_pending – List ALL customers with pending payments (outstanding balance). Use when user asks for the FULL list without a specific name. Examples: "mujhe khata batao kis ka kitna rehta hai", "acha mujhe na woh khata batao kis ka kitna rehta hai", "mujhy khat bata kiska kitna rehta ha", "give me customers whose payments are pending", "jinke payments pending hain", "pending payments list". No extra params.
-16. khata_customer – Show a SPECIFIC customer's khata (balance/udhaar). Use ONLY when user says a customer NAME (e.g. Talha, Ali). Needs: customerName (string). Examples: "Talha ka khata bata do kitna rehta hai", "acha yar mujhe Talha ka khata bata do", "Ali ka balance", "Usman ka udhaar kitna hai". IMPORTANT: If user asks "kis ka kitna rehta hai" or "kiska kitna rehta ha" WITHOUT a name, return khata_list_pending, NOT khata_customer.
-14. voice_sale (use intent "create_sale") – Your responsibility: understand the context, listen to the WHOLE message, and extract EACH product mentioned. Do not take one or two products – take EVERY product from the message. A single message may contain MULTIPLE products; all belong to the SAME sale. Never return only one or two items when the user said three or more (e.g. "3 breads 2 eggs 1 Coca-Cola" must yield three items).
+12. sales_report_today – User asks for today's sales/revenue/report. No extra params.
+13. sales_report_yesterday – User asks for yesterday's (kal) sales report. No extra params.
+14. sales_report_day_before_yesterday – User asks for day before yesterday's (parso) sales report. No extra params.
+15. list_open_bills – User asks for open bills, list of customers with open bills (e.g. "kitne bills khule hain", "open bills", "list bills", "khule hue bills bata do"). No extra params.
+16. khata_list_pending – List ALL customers with pending payments (outstanding balance). Use when user asks for the FULL list without a specific name. Examples: "mujhe khata batao kis ka kitna rehta hai", "acha mujhe na woh khata batao kis ka kitna rehta hai", "mujhy khat bata kiska kitna rehta ha", "give me customers whose payments are pending", "pending payments list". No extra params.
+17. khata_customer – Show a SPECIFIC customer's khata (balance/udhaar). Use ONLY when user says a customer NAME (e.g. Talha, Ali). Needs: customerName (string). Examples: "Talha ka khata bata do kitna rehta hai", "acha yar mujhe Talha ka khata bata do", "Ali ka balance", "Usman ka udhaar kitna hai". IMPORTANT: If user asks "kis ka kitna rehta hai" or "kiska kitna rehta ha" WITHOUT a name, return khata_list_pending, NOT khata_customer.
+18. voice_sale (use intent "create_sale") – Your responsibility: understand the context, listen to the WHOLE message, and extract EACH product mentioned. Do not take one or two products – take EVERY product from the message. A single message may contain MULTIPLE products; all belong to the SAME sale. Never return only one or two items when the user said three or more (e.g. "3 breads 2 eggs 1 Coca-Cola" must yield three items).
 
    Before responding, read the ENTIRE message. Words like "aur", "and", commas, or separate numbers indicate different items. Never stop after the first product; continue until all items are extracted.
 
@@ -36,7 +38,7 @@ Allowed tools (ONLY these – do not invent others):
    Example: "3 anday 2 bread aur 1 aquafina bech do payment cash" → {"intent":"create_sale","items":[{"product":"eggs","quantity":3},{"product":"bread","quantity":2},{"product":"aquafina","quantity":1}],"payment_method":"cash"}
 
    If you cannot extract any product, return: {"intent":"create_sale","items":[],"payment_method":"unknown"}
-14. help – Show command help. No extra params.
+19. help – Show command help. No extra params.
 
 CRITICAL – Product name extraction (MUST follow strictly):
 - The "name" field must be ONLY the product name – usually 1-2 words (e.g. talha, lazania, milk, bread, cooking oil).
@@ -78,10 +80,14 @@ Rules:
   - "add supplier it's name is saboor and phone number is 555555 and the email address is b@gmail.com" → {"action":"add_supplier","name":"saboor","phone":"555555","email":"b@gmail.com"}
   - "add supplier ABC Company and its phone number is 03001234567" → {"action":"add_supplier","name":"ABC Company","phone":"03001234567"}
   - "add supplier ABC Company" (no phone) → {"action":"add_supplier","name":"ABC Company","phone":null}
+  - add_expense – Add an expense. Needs: amount (number), description (string – e.g. "salaries", "bijli ka bill", "rent"). For salaries, use description "salaries" (category and description are same). Examples: "acha yar aj ma ny salaries di hein 35000" → {"action":"add_expense","amount":35000,"description":"salaries"}. "mera bijli ka bill add kr do 7000" → {"action":"add_expense","amount":7000,"description":"bijli ka bill"}. "7000 add kr do rent" → {"action":"add_expense","amount":7000,"description":"rent"}.
   - "give me today's sales" / "today's revenue" / "how much sales happened today" → {"action":"sales_report_today"}
   - "show sales report today" / "show today's top selling product" → {"action":"sales_report_today"}
   - "what product generated the most revenue today" → {"action":"sales_report_today"}
   - "give me the revenue generated by today's product sales" → {"action":"sales_report_today"}
+  - Roman Urdu: "mujhy aj ki sale batao" / "aj ki sale bata do" / "aj ka sale report" / "aj kitna sale hua" → {"action":"sales_report_today"}
+  - Yesterday: "give me yesterday's sales" / "mujhy kal ki sale batao" / "kal ka sale report" → {"action":"sales_report_yesterday"}
+  - Day before yesterday: "parso ki sale batao" / "parson ka report" / "day before yesterday sales" → {"action":"sales_report_day_before_yesterday"}
   - "kitne bills khule hain" / "open bills" / "list bills" / "khule hue bills bata do" / "show open bills" → {"action":"list_open_bills"}
   - "mujhe khata batao kis ka kitna rehta hai" / "acha mujhe na woh khata batao kis ka kitna rehta hai" / "mujhy khat bata kiska kitna rehta ha" (no name = list all) → {"action":"khata_list_pending"}
   - "give me customers whose payments are pending" / "pending payments list" / "jinke payments pending hain" → {"action":"khata_list_pending"}
@@ -372,7 +378,7 @@ function parseIntentResponse(text) {
     let action = (obj.action != null ? String(obj.action) : "").toLowerCase();
     if (obj.intent && (String(obj.intent).toLowerCase() === "sale" || String(obj.intent).toLowerCase() === "create_sale")) action = "voice_sale";
     if (!action) return null;
-    const allowed = ["add_product", "list_products", "low_stock", "search", "delete_product", "set_threshold", "set_stock", "add_customer", "add_customer_help", "add_supplier", "add_supplier_help", "sales_report_today", "list_open_bills", "khata_list_pending", "khata_customer", "voice_sale", "help", "out_of_scope", "unknown"];
+    const allowed = ["add_product", "list_products", "low_stock", "search", "delete_product", "set_threshold", "set_stock", "add_customer", "add_customer_help", "add_supplier", "add_supplier_help", "add_expense", "sales_report_today", "sales_report_yesterday", "sales_report_day_before_yesterday", "list_open_bills", "khata_list_pending", "khata_customer", "voice_sale", "help", "out_of_scope", "unknown"];
     if (!allowed.includes(action)) return null;
     if (action === "add_product") {
       let name = obj.name != null ? String(obj.name).trim() : "";
@@ -421,6 +427,12 @@ function parseIntentResponse(text) {
       const email = obj.email != null ? String(obj.email).trim() : "";
       if (!name) return { action: "unknown" };
       return { action: "add_supplier", name, phone: phone || null, email };
+    }
+    if (action === "add_expense") {
+      const amount = typeof obj.amount === "number" ? obj.amount : parseFloat(obj.amount);
+      const description = obj.description != null ? String(obj.description).trim() : "";
+      if (Number.isNaN(amount) || amount < 0 || !description) return { action: "unknown" };
+      return { action: "add_expense", amount, description };
     }
     if (action === "voice_sale" || (obj.intent && (String(obj.intent).toLowerCase() === "sale" || String(obj.intent).toLowerCase() === "create_sale"))) {
       const isCreateSale = obj.intent && String(obj.intent).toLowerCase() === "create_sale";
@@ -514,7 +526,7 @@ function parseIntentResponse(text) {
       }
       return { action: "voice_sale", items, paymentMethod, customerName: customerName || null, billAction, saleAction: "process_sale", saleConfidence: "high" };
     }
-    if (["list_products", "low_stock", "add_customer_help", "add_supplier_help", "sales_report_today", "list_open_bills", "khata_list_pending", "help", "out_of_scope", "unknown"].includes(action)) {
+    if (["list_products", "low_stock", "add_customer_help", "add_supplier_help", "sales_report_today", "sales_report_yesterday", "sales_report_day_before_yesterday", "list_open_bills", "khata_list_pending", "help", "out_of_scope", "unknown"].includes(action)) {
       return { action };
     }
     if (action === "khata_customer") {
