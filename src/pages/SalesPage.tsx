@@ -498,11 +498,11 @@ const SalesPage = () => {
 
           <div className="space-y-2">
             <Label className="text-sm text-muted-foreground">Payment</Label>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant={payMode === "full" ? "default" : "outline"}
                 size="sm"
-                className="flex-1"
+                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
                 onClick={() => { setPayMode("full"); setPaidAmountInput(""); }}
               >
                 Pay now (full)
@@ -510,7 +510,7 @@ const SalesPage = () => {
               <Button
                 variant={payMode === "credit" ? "default" : "outline"}
                 size="sm"
-                className="flex-1"
+                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
                 onClick={() => { setPayMode("credit"); setPaidAmountInput(""); }}
                 title="Customer will pay later (requires customer)"
               >
@@ -519,7 +519,7 @@ const SalesPage = () => {
               <Button
                 variant={payMode === "partial" ? "default" : "outline"}
                 size="sm"
-                className="flex-1"
+                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
                 onClick={() => setPayMode("partial")}
                 title="Pay some now, rest in khata (requires customer)"
               >

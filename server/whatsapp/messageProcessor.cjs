@@ -800,16 +800,23 @@ async function processIncomingMessage(msg, client) {
     if (command.action === "undo") {
       const history = getActionHistory(msg.from);
       const position = Number(command.undoPosition);
-      const index = position === 0
+      let index = position === 0
         ? 0
         : Math.max(0, history.length - Math.min(Math.max(1, position), 3));
       if (index >= history.length) {
         reply = "No command available to undo.";
         console.log("  → Undo: no action at position", position, "history:", history.length);
       } else {
-        const entry = removeActionAt(msg.from, index);
+        const reversible = ["add_expense", "add_product", "add_customer", "add_supplier", "voice_sale"];
+        let entry = removeActionAt(msg.from, index);
+        while (entry && (entry.action === "khata_list_pending" || entry.action === "khata_customer")) {
+          entry = removeActionAt(msg.from, 0);
+        }
         if (!entry) {
           reply = "No command available to undo.";
+        } else if (!reversible.includes(entry.action)) {
+          reply = "No command available to undo.";
+          if (entry.action) pushActionHistory(msg.from, entry);
         } else {
           let ok = false;
           try {
@@ -837,6 +844,7 @@ async function processIncomingMessage(msg, client) {
             console.log("  → Undo: reversed", entry.action, entry.label);
           } else {
             reply = `Could not undo the command "${entry.label}". It may no longer be reversible.`;
+            pushActionHistory(msg.from, entry);
             console.log("  → Undo: failed to reverse", entry.action);
           }
         }
@@ -1287,6 +1295,72 @@ async function processIncomingMessage(msg, client) {
         console.log(`  → Sales report: ${orders} orders, Rs ${revenue} revenue`);
       }
     }
+    } else if (command.action === "khata_list_pending") {
+      try {
+        const res = await fetch(`${API_BASE}/api/khata/ledger`);
+        const rows = await res.json().catch(() => []);
+        if (!res.ok) {
+          reply = "Could not fetch khata data. Is the POS server running?";
+        } else if (!rows || rows.length === 0) {
+          reply = "📒 *Khata (Pending Payments)*\n\nNo customers with outstanding balance.";
+        } else {
+          const byCustomer = {};
+          for (const r of rows) {
+            const key = (r.customerName || "?").trim();
+            if (!byCustomer[key]) byCustomer[key] = { totalDue: 0, sales: [] };
+            byCustomer[key].totalDue += Number(r.amountDue) || 0;
+            byCustomer[key].sales.push(r);
+          }
+          const fmt = (n) => Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+          const parts = ["📒 *Customers with Pending Payments*", ""];
+          let grandTotal = 0;
+          for (const [name, data] of Object.entries(byCustomer)) {
+            const due = data.totalDue;
+            grandTotal += due;
+            parts.push(`• *${name}* — Rs ${fmt(due)}`);
+          }
+          parts.push("", `*Total outstanding: Rs ${fmt(grandTotal)}*`);
+          reply = parts.join("\n");
+          console.log(`  → Khata list: ${Object.keys(byCustomer).length} customers, Rs ${grandTotal} total`);
+        }
+      } catch (err) {
+        reply = "Could not fetch khata. Is the POS server running?";
+        console.error("Khata list error:", err);
+      }
+    } else if (command.action === "khata_customer") {
+      const customerName = (command.customerName || "").trim();
+      if (!customerName) {
+        reply = "Please specify a customer name (e.g. *Talha ka khata bata do*).";
+      } else {
+        try {
+          const res = await fetch(`${API_BASE}/api/khata/ledger`);
+          const rows = await res.json().catch(() => []);
+          if (!res.ok) {
+            reply = "Could not fetch khata data. Is the POS server running?";
+          } else {
+            const query = customerName.toLowerCase();
+            const matches = (rows || []).filter((r) =>
+              (r.customerName || "").toLowerCase().includes(query) ||
+              query.includes((r.customerName || "").toLowerCase())
+            );
+            if (matches.length === 0) {
+              reply = `📒 *${customerName} ka Khata*\n\nNo khata found for *${customerName}*.`;
+            } else {
+              const totalDue = matches.reduce((sum, r) => sum + (Number(r.amountDue) || 0), 0);
+              const fmt = (n) => Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+              const parts = [`📒 *${matches[0].customerName} ka Khata*`, "", `*Balance: Rs ${fmt(totalDue)}*`, ""];
+              for (const r of matches) {
+                parts.push(`• ${r.items || "—"} | Paid: Rs ${fmt(r.paidAmount)} | Due: Rs ${fmt(r.amountDue)}`);
+              }
+              reply = parts.join("\n");
+              console.log(`  → Khata customer: ${customerName}, Rs ${totalDue}`);
+            }
+          }
+        } catch (err) {
+          reply = "Could not fetch khata. Is the POS server running?";
+          console.error("Khata customer error:", err);
+        }
+      }
     } else if (command.action === "voice_sale") {
       const items = command.items || [];
       const paymentMethod = command.paymentMethod === "card" ? "card" : "cash";
@@ -1516,6 +1590,11 @@ async function processIncomingMessage(msg, client) {
         "*Sales:*",
         "• *give me today's sales* – sales report (orders, revenue, top product, payment breakdown)",
         "• *show sales report today* – same as above",
+        "",
+        "*Khata (In-Out / Pending Payments):*",
+        "• *give me customers whose payments are pending* – list all with outstanding balance",
+        "• *Talha ka khata bata do* – show Talha's balance and items",
+        "• *mujhe Ali ka khata bata do kitna rehta hai* – customer's khata",
         "",
         "*Voice/Text Sale:*",
         "• *Sell 2 Milk, payment cash* – single product",
