@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -72,6 +72,25 @@ function createWindow() {
     ));
   }
 }
+
+ipcMain.handle('print-receipt', async (_, html) => {
+  return new Promise((resolve, reject) => {
+    const win = new BrowserWindow({
+      width: 300,
+      height: 400,
+      show: false,
+      webPreferences: { nodeIntegration: false },
+    });
+    win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    win.webContents.once('did-finish-load', () => {
+      win.webContents.print({ silent: true, printBackground: true }, (success, err) => {
+        win.close();
+        if (success) resolve();
+        else reject(err || new Error('Print failed'));
+      });
+    });
+  });
+});
 
 app.whenReady().then(() => {
   startApiServer()

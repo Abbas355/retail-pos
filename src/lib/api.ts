@@ -1,6 +1,9 @@
 declare global {
   interface Window {
-    electronAPI?: { getApiBaseUrl: () => string };
+    electronAPI?: {
+      getApiBaseUrl: () => string;
+      printReceipt?: (html: string) => Promise<void>;
+    };
   }
 }
 
@@ -187,6 +190,11 @@ export const permissionsApi = {
 export const syncApi = {
   pull: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/pull", { method: "POST" }),
   push: () => fetchApi<{ ok: boolean; message?: string; error?: string }>("/sync/push", { method: "POST" }),
+};
+
+export const printApi = {
+  receipt: (data: { sale: import("@/types/pos").Sale; settings: { storeName: string; currencySymbol: string; receiptHeader?: string; receiptFooter?: string }; locale?: string }) =>
+    fetchApi<{ ok: boolean }>("/print/receipt", { method: "POST", body: JSON.stringify(data) }),
 };
 
 export interface ActivityItem {

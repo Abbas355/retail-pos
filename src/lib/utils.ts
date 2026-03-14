@@ -22,14 +22,16 @@ export function getDatePartFromApi(d: Date | string | null | undefined): string 
 
 /** Format date/time for display in Pakistan time. */
 export function formatDateTimePK(iso: string | Date | null | undefined, opts?: Intl.DateTimeFormatOptions): string {
-  if (iso == null) return "—";
+  if (iso == null || iso === "") return "—";
   const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("en-PK", { timeZone: TIMEZONE_PK, ...opts });
 }
 
 /** Format date only (no time) in Pakistan time. */
 export function formatDatePK(iso: string | Date | null | undefined): string {
-  if (iso == null) return "—";
+  if (iso == null || iso === "") return "—";
   const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-PK", { timeZone: TIMEZONE_PK });
 }

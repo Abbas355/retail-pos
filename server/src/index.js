@@ -12,6 +12,7 @@ import usersRoutes from "./routes/users.js";
 import permissionsRoutes from "./routes/permissions.js";
 import syncRoutes from "./routes/sync.js";
 import activityRoutes from "./routes/activity.js";
+import printRoutes from "./routes/print.js";
 import { query } from "./config/database.js";
 
 const app = express();
@@ -30,6 +31,7 @@ app.use("/api/users", usersRoutes);
 app.use("/api/permissions", permissionsRoutes);
 app.use("/api/sync", syncRoutes);
 app.use("/api/activity", activityRoutes);
+app.use("/api/print", printRoutes);
 
 /** When using SQLite and MySQL env is set, pull MySQL → SQLite on startup so desktop shows MySQL data. */
 async function syncFromMysqlIfConfigured() {

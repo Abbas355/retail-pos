@@ -3,6 +3,7 @@
  * Inserts into activity_log table so Activity feed can show deletions.
  */
 import { query } from "../config/database.js";
+import { getNowPK } from "./dateUtils.js";
 
 /**
  * Infer source from request: pos or whatsapp.
@@ -31,7 +32,7 @@ export function inferDeleteSource(req) {
 export async function logActivityDelete(opts) {
   const { type, entityId, summary, amount = 0, source, deletedBy } = opts;
   const id = `al-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const createdAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const createdAt = getNowPK();
   try {
     await query(
       "INSERT INTO activity_log (id, type, entity_id, summary, amount, source, deleted_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../config/database.js";
 import { logActivityDelete, inferDeleteSource } from "../lib/activityLog.js";
+import { toDbDateTimePK, toIsoPK } from "../lib/dateUtils.js";
 
 const router = Router();
 
@@ -15,8 +16,13 @@ router.get("/", async (req, res) => {
       params.push(from);
     }
     if (to) {
-      sql += " AND date <= ?";
-      params.push(to);
+      // Use exclusive upper bound (date < next day) so full day is included.
+      // date <= "2026-03-15" treats "2026-03-15" as midnight, excluding e.g. 14:30.
+      const [y, m, d] = String(to).split("-").map(Number);
+      const next = new Date(Date.UTC(y, m - 1, d + 1));
+      const nextDayStr = next.toISOString().slice(0, 10);
+      sql += " AND date < ?";
+      params.push(nextDayStr);
     }
     if (category && String(category).trim()) {
       sql += " AND category = ?";
@@ -31,7 +37,7 @@ router.get("/", async (req, res) => {
       amount: parseFloat(r.amount),
       category: r.category,
       description: r.description || "",
-      date: r.date ? new Date(r.date).toISOString() : null,
+      date: toIsoPK(r.date),
       createdBy: r.created_by || null,
       source: r.source && String(r.source).toLowerCase() === "whatsapp" ? "whatsapp" : "pos",
     }));
@@ -53,7 +59,7 @@ router.post("/", async (req, res) => {
     }
 
     const id = `exp-${Date.now()}`;
-    const dateVal = date ? new Date(date).toISOString().slice(0, 19).replace("T", " ") : new Date().toISOString().slice(0, 19).replace("T", " ");
+    const dateVal = toDbDateTimePK(date);
     const desc = description != null ? String(description).trim() : "";
     const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
 
@@ -71,7 +77,7 @@ router.post("/", async (req, res) => {
       amount: parseFloat(row.amount),
       category: row.category,
       description: row.description || "",
-      date: row.date ? new Date(row.date).toISOString() : null,
+      date: toIsoPK(row.date),
       createdBy: row.created_by || null,
       source: row.source && String(row.source).toLowerCase() === "whatsapp" ? "whatsapp" : "pos",
     };

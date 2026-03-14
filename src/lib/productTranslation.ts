@@ -35,26 +35,157 @@ function transliterateToUrduScript(word: string): string {
   return out.join("");
 }
 
-/** English word/phrase -> Urdu. Lowercase keys for case-insensitive match. */
+/**
+ * English word/phrase → proper Urdu script.
+ * Uses natural market/shop Urdu. Brand names as commonly written.
+ * No Roman Urdu.
+ */
 const EN_TO_UR: Record<string, string> = {
+  // Staples & groceries
   rice: "چاول",
-  milk: "دودھ",
-  bread: "روٹی",
+  flour: "آٹا",
   sugar: "چینی",
+  salt: "نمک",
+  lentils: "دال",
+  beans: "پھلیاں",
+  pasta: "پاستا",
+  noodles: "نوڈلز",
+  cereal: "اناج",
+  oats: "جئی",
+  corn: "مکئی",
+  "cooking oil": "پکانے کا تیل",
+  "cooking": "پکانے",
+  oil: "تیل",
+  vinegar: "سرکہ",
+  honey: "شہد",
+  jam: "مربہ",
+  sauce: "چٹنی",
+  ketchup: "کیچپ",
+  spices: "مصالحے",
+  pepper: "کالی مرچ",
+  garlic: "لہسن",
+  ginger: "ادرک",
+
+  // Dairy & eggs
+  milk: "دودھ",
   eggs: "انڈے",
+  yogurt: "دہی",
+  yoghurt: "دہی",
+  cheese: "پنیر",
+  butter: "مکھن",
+
+  // Bakery
+  bread: "روٹی",
+  paratha: "پراٹھا",
+  parathas: "پراٹھا",
+  naan: "نان",
+  roti: "روٹی",
+  biscuit: "بسکٹ",
+  biscuits: "بسکٹ",
+  cookies: "کوکیز",
+  cake: "کیک",
+  bakery: "بیکری",
+
+  // Fruits & vegetables
+  apple: "سیب",
+  banana: "کیلا",
+  bananas: "کیلے",
+  mango: "آم",
+  mangoes: "آم",
+  orange: "مالٹا",
+  oranges: "مالٹے",
+  grape: "انگور",
+  grapes: "انگور",
+  lemon: "لیموں",
+  lemons: "لیموں",
+  potato: "آلو",
+  potatoes: "آلو",
+  tomato: "ٹماٹر",
+  tomatoes: "ٹماٹر",
+  onion: "پیاز",
+  onions: "پیاز",
+  carrot: "گاجر",
+  carrots: "گاجر",
+  cucumber: "کھیرا",
+  spinach: "پالک",
+  cauliflower: "گوبھی",
+  cabbage: "بند گوبھی",
+  peas: "مٹر",
+  chili: "مرچ",
+  chillies: "مرچیں",
+  fruits: "پھل",
+  vegetables: "سبزیاں",
+
+  // Nuts & dry fruits
+  chilgoza: "چلغوزہ",
+  almond: "بادام",
+  almonds: "بادام",
+  walnut: "اخروٹ",
+  walnuts: "اخروٹ",
+  cashew: "کاجو",
+  cashews: "کاجو",
+  peanut: "مونگ پھلی",
+  peanuts: "مونگ پھلی",
+  raisin: "کشمش",
+  raisins: "کشمش",
+  dates: "کھجور",
+  date: "کھجور",
+
+  // Meat & protein
+  chicken: "مرغ",
+  beef: "گائے کا گوشت",
+  mutton: "بھیڑ کا گوشت",
+  fish: "مچھلی",
+
+  // Beverages
+  tea: "چائے",
+  water: "پانی",
+  juice: "جوس",
+  drink: "مشروب",
+  "soft drink": "سافٹ ڈرنک",
+  chocolate: "چاکلیٹ",
+
+  // Common brands (as written in Urdu)
+  "coca cola": "کوکا کولا",
+  cocacola: "کوکا کولا",
+  coke: "کوک",
+  pepsi: "پیپسی",
+  aquafina: "آکوافینا",
+  nestle: "نسٹلے",
+  danone: "ڈینون",
+  olpers: "اولپرز",
+  nanak: "نانک",
+
+  // Household
   soap: "صابن",
   detergent: "ڈٹرجنٹ",
-  oil: "تیل",
-  cooking: "پکانے",
-  "cooking oil": "پکانے کا تیل",
-  apple: "سیب",
-  fruits: "پھل",
-  bakery: "بیکری",
-  dairy: "ڈیری",
-  groceries: "راشن",
-  household: "گھریلو",
+  shampoo: "شیمپو",
+  toothpaste: "ٹوتھ پیسٹ",
+  tissue: "ٹشو",
+  sanitizer: "سینیٹائزر",
+  "hand sanitizer": "ہاتھ سینیٹائزر",
+  alcohol: "الکحل",
+  cream: "کریم",
+  lotion: "لوشن",
+  gel: "جیل",
+  spray: "سپرے",
+  paper: "کاغذ",
+  towel: "تولیہ",
+  napkin: "رومال",
+  wipe: "وائپ",
+  wipes: "وائپس",
+
+  // Packaging & units
+  bottle: "بوتل",
+  bottles: "بوتلیں",
+  pack: "پیک",
+  box: "ڈبہ",
+  tin: "ٹن",
+  can: "ڈبہ",
+  bag: "تھیلا",
   bar: "سلاخ",
   pc: "عدد",
+  pcs: "عدد",
   kg: "کلو",
   g: "گرام",
   gram: "گرام",
@@ -62,79 +193,24 @@ const EN_TO_UR: Record<string, string> = {
   litre: "لیٹر",
   liter: "لیٹر",
   l: "لیٹر",
-  "low stock threshold": "کم اسٹاک حد",
-  yogurt: "دہی",
-  "yoghurt": "دہی",
-  cheese: "پنیر",
-  butter: "مکھن",
-  tea: "چائے",
-  flour: "آٹا",
-  salt: "نمک",
-  lentils: "دال",
-  beans: "پھلیاں",
-  potato: "آلو",
-  tomato: "ٹماٹر",
-  onion: "پیاز",
-  chicken: "مرغ",
-  beef: "گائے کا گوشت",
-  juice: "جوس",
-  water: "پانی",
-  bottle: "بوتل",
-  pack: "پیک",
-  box: "ڈبہ",
-  tin: "ٹن",
-  can: "ڈبہ",
-  bag: "تھیلا",
-  shampoo: "شیمپو",
-  toothpaste: "ٹوتھ پیسٹ",
-  tissue: "ٹشو",
-  alcohol: "الکحل",
-  sanitizer: "سینیٹائزر",
-  "hand sanitizer": "ہینڈ سینیٹائزر",
+  ml: "ملی لیٹر",
+
+  // Categories & descriptors
+  dairy: "ڈیری",
+  groceries: "راشن",
+  household: "گھریلو",
   fresh: "تازہ",
   organic: "نامیاتی",
   premium: "پریمیم",
   cold: "ٹھنڈا",
   hot: "گرم",
   soft: "نرم",
-  drink: "مشروب",
-  "soft drink": "سافٹ ڈرنک",
-  biscuit: "بسکٹ",
-  cookies: "کوکیز",
-  chocolate: "چاکلیٹ",
-  honey: "شہد",
-  jam: "مربہ",
-  sauce: "چٹنی",
-  ketchup: "کیچپ",
-  pasta: "پاستا",
-  noodles: "نوڈلز",
-  cereal: "اناج",
-  oats: "جئی",
-  corn: "مکئی",
-  vinegar: "سرکہ",
-  spices: "مصالحے",
-  pepper: "کالی مرچ",
-  garlic: "لہسن",
-  ginger: "ادرک",
-  green: "سبز",
-  red: "سرخ",
-  white: "سفید",
-  black: "سیاہ",
-  powder: "پاؤڈر",
-  liquid: "مائع",
-  spray: "سپرے",
-  gel: "جیل",
-  cream: "کریم",
-  lotion: "لوشن",
-  wipe: "وائپ",
-  wipes: "وائپس",
-  paper: "کاغذ",
-  towel: "تولیہ",
-  napkin: "رومال",
-  hand: "ہاتھ",
-  face: "چہرہ",
-  body: "جسم",
-  hair: "بال",
+  low: "کم",
+  high: "زیادہ",
+  fat: "چربی",
+  "low fat": "کم چربی",
+  vitamin: "وٹامن",
+  energy: "توانائی",
   clean: "صاف",
   cleaning: "صفائی",
   wash: "دھلائی",
@@ -146,23 +222,24 @@ const EN_TO_UR: Record<string, string> = {
   original: "اصل",
   natural: "قدرتی",
   pure: "خالص",
-  low: "کم",
-  high: "زیادہ",
-  fat: "چربی",
-  "low fat": "کم چربی",
-  vitamin: "وٹامن",
-  energy: "توانائی",
+  hand: "ہاتھ",
+  face: "چہرہ",
+  body: "جسم",
+  hair: "بال",
+  powder: "پاؤڈر",
+  liquid: "مائع",
+  "low stock threshold": "کم اسٹاک حد",
 };
 
-/** Unit patterns: (5kg) -> (۵ کلو), (1L) -> (۱ لیٹر), (12pc) -> (۱۲ عدد) */
+/** Unit patterns: (5kg) -> (۵ کلو), (1L) -> (۱ لیٹر), (12pc) -> (۱۲ عدد), (500g) -> (۵۰۰ گرام) */
 function translateUnit(match: string): string {
   const inner = match.replace(/[()]/g, "").trim();
-  const numMatch = inner.match(/^(\d+)\s*(kg|g|gram|grams|L|litre|liter|pc)?$/i);
+  const numMatch = inner.match(/^(\d+)\s*(kg|g|gram|grams|L|litre|liter|ml|pc|pcs)?$/i);
   if (numMatch) {
     const num = toUrduNumerals(numMatch[1]);
     const unit = (numMatch[2] || "").toLowerCase();
     const urUnit =
-      unit === "kg" ? "کلو" : unit === "g" || unit === "gram" || unit === "grams" ? "گرام" : unit === "l" || unit === "litre" || unit === "liter" ? "لیٹر" : unit === "pc" ? "عدد" : "";
+      unit === "kg" ? "کلو" : unit === "g" || unit === "gram" || unit === "grams" ? "گرام" : unit === "l" || unit === "litre" || unit === "liter" ? "لیٹر" : unit === "ml" ? "ملی لیٹر" : unit === "pc" || unit === "pcs" ? "عدد" : "";
     return urUnit ? `(${num} ${urUnit})` : `(${num})`;
   }
   return toUrduNumerals(match);
@@ -177,8 +254,8 @@ export function translateProductNameToUrdu(englishName: string): string {
 
   let out = englishName.trim();
 
-  // Replace unit patterns like (5kg), (1L), (12pc), (500g)
-  out = out.replace(/\(\s*\d+\s*(kg|g|gram|grams|L|litre|liter|pc)\s*\)/gi, (m) =>
+  // Replace unit patterns like (5kg), (1L), (12pc), (500g), (500ml)
+  out = out.replace(/\(\s*\d+\s*(kg|g|gram|grams|L|litre|liter|ml|pc|pcs)\s*\)/gi, (m) =>
     translateUnit(m)
   );
   // Standalone numbers in parentheses to Urdu numerals

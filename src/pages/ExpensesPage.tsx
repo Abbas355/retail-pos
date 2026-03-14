@@ -39,7 +39,7 @@ const ExpensesPage = () => {
     mutationFn: (data: { amount: number; category: string; description?: string; date?: string }) =>
       expensesApi.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses"], refetchType: "all" });
       setDialogOpen(false);
       setForm({ amount: "", category: "", description: "" });
       toast.success("Expense added");
@@ -50,7 +50,7 @@ const ExpensesPage = () => {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => expensesApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses"], refetchType: "all" });
       setDeleteTarget(null);
       toast.success("Expense deleted");
     },

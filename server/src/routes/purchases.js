@@ -1,5 +1,6 @@
 import { Router } from "express";
 import pool, { query } from "../config/database.js";
+import { getNowPK } from "../lib/dateUtils.js";
 
 const router = Router();
 
@@ -54,7 +55,7 @@ router.post("/", async (req, res) => {
     }
     const purchaseId = `pur-${Date.now()}`;
     const source = reqSource && String(reqSource).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
-    const date = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const date = getNowPK();
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();

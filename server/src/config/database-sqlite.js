@@ -70,10 +70,10 @@ function ensureProductsBarcodeColumn() {
     const info = db.prepare("PRAGMA table_info(products)").all();
     const hasBarcode = info.some((col) => col.name === "barcode");
     if (!hasBarcode) {
-      db.exec("ALTER TABLE products ADD COLUMN barcode TEXT UNIQUE");
-      db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)");
+      db.exec("ALTER TABLE products ADD COLUMN barcode TEXT");
     }
-  } catch (e) { if (!/duplicate column|already exists/i.test(e.message)) throw e; }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)");
+  } catch (e) { if (!/duplicate column name|already exists/i.test(e.message)) throw e; }
 }
 ensureProductsBarcodeColumn();
 

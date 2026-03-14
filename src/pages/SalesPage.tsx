@@ -4,14 +4,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { Product, CartItem, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
-import { customersApi, productsApi, salesApi } from "@/lib/api";
+import { customersApi, productsApi, salesApi, printApi } from "@/lib/api";
 import { getProductDisplayName } from "@/lib/productTranslation";
 import { formatDateTimePK } from "@/lib/utils";
+import { DEFAULT_SETTINGS, SETTINGS_STORAGE_KEY } from "@/lib/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Percent } from "lucide-react";
+import { Plus, Minus, Trash2, CreditCard, Banknote, Receipt, Search, ShoppingBag, Printer } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -54,6 +55,27 @@ const SalesPage = () => {
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [productNotFoundBarcode, setProductNotFoundBarcode] = useState<string | null>(null);
+
+  const getSettings = () => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) return DEFAULT_SETTINGS;
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  };
+
+  const handlePrintReceipt = async () => {
+    if (!receiptSale) return;
+    const settings = getSettings();
+    try {
+      await printApi.receipt({ sale: receiptSale, settings, locale });
+      toast.success("Receipt sent to printer");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Print failed");
+    }
+  };
 
   const barcodeBufferRef = useRef("");
   const barcodeResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -265,8 +287,8 @@ const SalesPage = () => {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] gap-5 animate-slide-in">
-      {/* Left: Product catalog */}
-      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+      {/* Left: Product catalog - constrained so cart gets more space */}
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0 max-w-3xl">
         <div className="relative mb-4 shrink-0 w-full min-w-0 p-2">
           <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
@@ -345,118 +367,33 @@ const SalesPage = () => {
         </div>
       </div>
 
-      {/* Right: Current Order */}
-      <div className="flex w-80 shrink-0 flex-col card-elevated p-4 rounded-lg overflow-hidden">
-        <h2 className="mb-3 font-heading text-lg font-semibold flex items-center gap-2">
-          <ShoppingBag className="h-5 w-5" />
-          {t("sales.currentOrder")}
-        </h2>
-
-        <div className="flex-1 flex flex-col min-h-0">
-          {cart.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
-              <ShoppingBag className="h-14 w-14 text-muted-foreground/50 mb-3" strokeWidth={1.5} />
-              <p className="text-sm font-medium text-muted-foreground">{t("sales.noItemsYet")}</p>
-              <p className="text-xs text-muted-foreground mt-1">{t("sales.tapProductToAdd")}</p>
-            </div>
-          ) : (
-            <div className="flex-1 space-y-2 overflow-auto min-h-0">
-              {cart.map((item) => {
-                const { primary, secondary } = getProductDisplayName(item.product, locale);
-                return (
-                <div key={item.product.id} className="rounded-lg bg-muted p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className={`truncate text-sm font-medium ${locale === "ur" ? "text-right" : ""}`} dir={locale === "ur" ? "rtl" : "ltr"}>{primary}</p>
-                      {secondary && (
-                        <p className="text-xs text-muted-foreground truncate" dir={locale === "ur" ? "ltr" : "rtl"}>{secondary}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        ${item.product.price.toFixed(2)} {t("sales.each")}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => removeFromCart(item.product.id)}
-                      className="text-muted-foreground hover:text-destructive shrink-0"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => updateQuantity(item.product.id, -1)}
-                        className="flex h-7 w-7 items-center justify-center rounded-md border hover:bg-background"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </button>
-                      <span className="w-8 text-center text-sm font-semibold">{item.quantity}</span>
-                      <button
-                        onClick={() => updateQuantity(item.product.id, 1)}
-                        className="flex h-7 w-7 items-center justify-center rounded-md border hover:bg-background"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <span className="font-semibold">
-                      ${(item.product.price * item.quantity).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                );
-              })}
-            </div>
-          )}
+      {/* Right: Current Order - professional layout */}
+      <div className="flex w-[440px] min-w-[400px] shrink-0 flex-col card-elevated rounded-lg overflow-hidden border">
+        {/* 1. Title */}
+        <div className="shrink-0 px-4 py-3 border-b bg-muted/30">
+          <h2 className="font-heading text-lg font-semibold flex items-center gap-2">
+            <ShoppingBag className="h-5 w-5" />
+            {t("sales.currentOrder")}
+          </h2>
         </div>
 
-        <div className="mt-4 space-y-3 border-t pt-4 shrink-0">
+        {/* 2. Customer selection - always at top */}
+        <div className="shrink-0 px-4 py-3 border-b">
           {isAddingCustomer ? (
-            <div className="space-y-3">
-              <div className="grid gap-1.5">
-                <Label>Name</Label>
-                <Input
-                  value={newCustomerName}
-                  onChange={(e) => setNewCustomerName(e.target.value)}
-                  placeholder="Customer name"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Phone</Label>
-                <Input
-                  value={newCustomerPhone}
-                  onChange={(e) => setNewCustomerPhone(e.target.value)}
-                  placeholder="Phone (optional)"
-                />
-              </div>
+            <div className="space-y-2">
+              <Input value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} placeholder="Customer name" className="h-9" />
+              <Input value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} placeholder="Phone (optional)" className="h-9" />
               <div className="flex gap-2">
-                <Button
-                  onClick={saveNewCustomer}
-                  disabled={createCustomerMutation.isPending || !newCustomerName.trim()}
-                  className="flex-1"
-                >
+                <Button size="sm" onClick={saveNewCustomer} disabled={createCustomerMutation.isPending || !newCustomerName.trim()} className="flex-1">
                   {createCustomerMutation.isPending ? "Saving…" : "Save"}
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setIsAddingCustomer(false);
-                    setNewCustomerName("");
-                    setNewCustomerPhone("");
-                  }}
-                >
-                  Cancel
-                </Button>
+                <Button size="sm" variant="outline" onClick={() => { setIsAddingCustomer(false); setNewCustomerName(""); setNewCustomerPhone(""); }}>Cancel</Button>
               </div>
             </div>
           ) : (
             <div className="flex gap-2">
-              <Select
-                value={selectedCustomer || "none"}
-                onValueChange={(v) => setSelectedCustomer(v === "none" ? "" : v)}
-                className="flex-1"
-              >
-                <SelectTrigger>
+              <Select value={selectedCustomer || "none"} onValueChange={(v) => setSelectedCustomer(v === "none" ? "" : v)} className="flex-1">
+                <SelectTrigger className="h-9">
                   <SelectValue placeholder="Walk-in customer" />
                 </SelectTrigger>
                 <SelectContent>
@@ -468,146 +405,124 @@ const SalesPage = () => {
                   ))}
                 </SelectContent>
               </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => setIsAddingCustomer(true)}
-                title="Add customer"
-              >
+              <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={() => setIsAddingCustomer(true)} title="Add customer">
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
           )}
+        </div>
 
-          <div className="flex gap-2">
-            <Button
-              variant={paymentMethod === "cash" ? "default" : "outline"}
-              className="flex-1"
-              onClick={() => setPaymentMethod("cash")}
-            >
-              <Banknote className="mr-1 h-4 w-4" /> Cash
-            </Button>
-            <Button
-              variant={paymentMethod === "card" ? "default" : "outline"}
-              className="flex-1"
-              onClick={() => setPaymentMethod("card")}
-            >
-              <CreditCard className="mr-1 h-4 w-4" /> Card
-            </Button>
+        {/* 3. Cart items - large scrollable section */}
+        <div className="flex-1 min-h-[200px] overflow-y-auto px-4 py-3">
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
+              <ShoppingBag className="h-12 w-12 mb-2 opacity-40" strokeWidth={1.5} />
+              <p className="text-sm font-medium">{t("sales.noItemsYet")}</p>
+              <p className="text-xs mt-0.5">{t("sales.tapProductToAdd")}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {cart.map((item) => {
+                const { primary, secondary } = getProductDisplayName(item.product, locale);
+                return (
+                  <div key={item.product.id} className="rounded-lg border bg-muted/50 p-2 flex gap-2 items-center">
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                      <p className={`text-sm font-medium truncate ${locale === "ur" ? "text-right" : ""}`} dir={locale === "ur" ? "rtl" : "ltr"}>{primary}</p>
+                      {secondary && <p className="text-xs text-muted-foreground truncate" dir={locale === "ur" ? "rtl" : "ltr"}>{secondary}</p>}
+                      <p className="text-xs text-muted-foreground">${item.product.price.toFixed(2)} {t("sales.each")}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => updateQuantity(item.product.id, -1)} className="h-7 w-7 flex items-center justify-center rounded border hover:bg-background" aria-label="Decrease"><Minus className="h-3 w-3" /></button>
+                      <span className="w-7 text-center text-sm font-semibold tabular-nums">{item.quantity}</span>
+                      <button onClick={() => updateQuantity(item.product.id, 1)} className="h-7 w-7 flex items-center justify-center rounded border hover:bg-background" aria-label="Increase"><Plus className="h-3 w-3" /></button>
+                    </div>
+                    <span className="text-sm font-semibold shrink-0 min-w-[52px] text-right">${(item.product.price * item.quantity).toFixed(2)}</span>
+                    <button onClick={() => removeFromCart(item.product.id)} className="text-muted-foreground hover:text-destructive shrink-0 p-0.5" aria-label="Remove"><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Subtotal - above payment, no scroll needed */}
+        <div className="shrink-0 px-4 py-2 border-t bg-muted/10 flex justify-between items-baseline">
+          <span className="text-sm text-muted-foreground">Subtotal</span>
+          <span className="font-semibold font-heading">${subtotal.toFixed(2)}</span>
+        </div>
+
+        {/* 4. Payment controls */}
+        <div className="shrink-0 px-4 py-3 border-t space-y-3 bg-muted/20">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Payment method</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {(["cash", "card"] as const).map((m) => (
+                <Button key={m} variant={paymentMethod === m ? "default" : "outline"} size="sm" className="h-8 text-xs" onClick={() => setPaymentMethod(m)}>
+                  {m === "cash" && <Banknote className="mr-1 h-3.5 w-3.5" />}
+                  {m === "card" && <CreditCard className="mr-1 h-3.5 w-3.5" />}
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </Button>
+              ))}
+              </div>
+            </div>
+            <div className="shrink-0">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Discount</Label>
+              <div className="flex items-center gap-1.5">
+                <Select value={discountType} onValueChange={(v) => setDiscountType(v as "percent" | "fixed")}>
+                  <SelectTrigger className="w-14 h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="percent">%</SelectItem><SelectItem value="fixed">$</SelectItem></SelectContent>
+                </Select>
+                <Input type="number" min={0} step={discountType === "percent" ? 1 : 0.01} placeholder={discountType === "percent" ? "0–100" : "0"} value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} className="w-14 h-8 text-xs" />
+                {discountValue && <Button type="button" variant="ghost" size="sm" className="h-8 text-xs px-1.5" onClick={clearDiscount}>Clear</Button>}
+              </div>
+            </div>
           </div>
-
-          <div className="space-y-2">
-            <Label className="text-sm text-muted-foreground">Payment</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant={payMode === "full" ? "default" : "outline"}
-                size="sm"
-                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
-                onClick={() => { setPayMode("full"); setPaidAmountInput(""); }}
-              >
-                Pay now (full)
-              </Button>
-              <Button
-                variant={payMode === "credit" ? "default" : "outline"}
-                size="sm"
-                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
-                onClick={() => { setPayMode("credit"); setPaidAmountInput(""); }}
-                title="Customer will pay later (requires customer)"
-              >
-                Pay later (credit)
-              </Button>
-              <Button
-                variant={payMode === "partial" ? "default" : "outline"}
-                size="sm"
-                className="min-w-0 flex-1 shrink-0 basis-0 whitespace-nowrap"
-                onClick={() => setPayMode("partial")}
-                title="Pay some now, rest in khata (requires customer)"
-              >
-                Partial
-              </Button>
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1.5 block">Payment type</Label>
+            <div className="flex flex-wrap gap-1 items-center">
+              <Button variant={payMode === "full" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => { setPayMode("full"); setPaidAmountInput(""); }}>Pay now</Button>
+              <Button variant={payMode === "credit" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => { setPayMode("credit"); setPaidAmountInput(""); }} title="Requires customer">Pay later</Button>
+              <Button variant={payMode === "partial" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => setPayMode("partial")} title="Requires customer">Partial</Button>
+              <Button size="sm" className="h-7 text-xs px-2 font-semibold" onClick={completeSale} disabled={cart.length === 0}>Complete Sale</Button>
             </div>
             {payMode === "partial" && (
-              <div className="flex items-center gap-2">
-                <Label htmlFor="paid-amt" className="text-sm shrink-0">Amount paid now</Label>
-                <Input
-                  id="paid-amt"
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  max={total}
-                  placeholder={`0 - ${total.toFixed(2)}`}
-                  value={paidAmountInput}
-                  onChange={(e) => setPaidAmountInput(e.target.value)}
-                />
+              <div className="flex items-center gap-2 mt-2">
+                <Label htmlFor="paid-amt" className="text-xs shrink-0">Paid now</Label>
+                <Input id="paid-amt" type="number" min={0} step={0.01} max={total} placeholder={`0–${total.toFixed(2)}`} value={paidAmountInput} onChange={(e) => setPaidAmountInput(e.target.value)} className="h-8 w-24 text-sm" />
               </div>
             )}
             {(payMode === "credit" || payMode === "partial") && !selectedCustomer && (
-              <p className="text-xs text-amber-600">Select a customer for credit/partial payment</p>
+              <p className="text-xs text-amber-600 mt-1">Select a customer for credit/partial</p>
             )}
           </div>
+        </div>
 
-          <div className="space-y-2 border-t pt-3">
-            <div className="flex items-center justify-between text-sm text-muted-foreground">
-              <span>Subtotal</span>
-              <span>${subtotal.toFixed(2)}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-muted-foreground flex items-center gap-1">
-                <Percent className="h-3.5 w-3.5" /> Discount
-              </span>
-              <Select value={discountType} onValueChange={(v) => setDiscountType(v as "percent" | "fixed")}>
-                <SelectTrigger className="w-24 h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="percent">%</SelectItem>
-                  <SelectItem value="fixed">$</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input
-                type="number"
-                min={0}
-                step={discountType === "percent" ? 1 : 0.01}
-                placeholder={discountType === "percent" ? "0–100" : "0.00"}
-                value={discountValue}
-                onChange={(e) => setDiscountValue(e.target.value)}
-                className="w-20 h-8 text-sm"
-              />
-              {discountValue && (
-                <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={clearDiscount}>
-                  Clear
-                </Button>
-              )}
-            </div>
+        {/* 5. Totals - sticky footer */}
+        <div className="shrink-0 px-4 py-3 border-t space-y-2 bg-background">
             {discountAmount > 0 && (
-              <div className="flex items-center justify-between text-sm text-destructive">
+              <div className="flex justify-between text-sm text-destructive">
                 <span>Discount</span>
-                <span>${discountAmount.toFixed(2)}</span>
+                <span>−${discountAmount.toFixed(2)}</span>
               </div>
             )}
-            <div className="flex items-center justify-between text-lg font-bold pt-1">
+            <div className="flex justify-between text-lg font-bold pt-1">
               <span>Total</span>
               <span className="font-heading">${total.toFixed(2)}</span>
             </div>
           </div>
-
-          <Button
-            className="w-full"
-            size="lg"
-            onClick={completeSale}
-            disabled={cart.length === 0}
-          >
-            Complete Sale
-          </Button>
         </div>
-      </div>
 
       <Dialog open={!!receiptSale} onOpenChange={() => setReceiptSale(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Receipt className="h-5 w-5" /> Receipt
+            <DialogTitle className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <Receipt className="h-5 w-5" /> Receipt
+              </span>
+              <Button variant="outline" size="sm" onClick={handlePrintReceipt} className="shrink-0">
+                <Printer className="h-4 w-4 mr-1" /> Print
+              </Button>
             </DialogTitle>
           </DialogHeader>
           {receiptSale && (

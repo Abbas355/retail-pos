@@ -194,7 +194,12 @@ function parseCommand(text) {
   }
 
   // --- Sales report comparison (today vs yesterday) — check before single-day
-  if (/(today|aj|today'?s?)\s*(or|vs|versus|and|aur)\s*(yesterday|kal|yesterday'?s?)/i.test(lower) ||
+  if (/(mujhy|mujhe|mujh e)\s+(aj|today)\s+(or|aur)\s+(kal|yesterday)\s+(ki\s+)?report\s+do/i.test(lower) ||
+      /(acha\s+yar\s+)?(aisa\s+kro?\s+)?(k|ke)\s+(kal|yesterday)\s+(or|aur)\s+(aj|today)\s+(ki\s+)?report\s+do/i.test(lower) ||
+      /(kal|yesterday)\s+(or|aur)\s+(aj|today)\s+(ki\s+)?report/i.test(lower) ||
+      /(aj|today)\s+(or|aur)\s+(kal|yesterday)\s+(ki\s+)?report\s+do/i.test(lower) ||
+      /kya\s+scene\s+chal\s+rha\s+(ha|hai)\s+aj\s+kal/i.test(lower) ||
+      /(today|aj|today'?s?)\s*(or|vs|versus|and|aur)\s*(yesterday|kal|yesterday'?s?)/i.test(lower) ||
       /(yesterday|kal)\s*(or|vs|versus|and|aur)\s*(today|aj)/i.test(lower) ||
       /(aj|today)\s+(or|aur)\s+(kal|yesterday)\s+(ki\s+)?(sales?|revenue|profit)\s+(ka\s+)?(faraq|farq|difference)/i.test(lower) ||
       /(faraq|farq|difference)\s+(batao|bata\s*do|btao|bta\s*do)/i.test(lower) && (lower.includes("aj") || lower.includes("kal") || lower.includes("today") || lower.includes("yesterday")) ||
@@ -207,11 +212,11 @@ function parseCommand(text) {
   }
 
   // --- Sales report today (English + Roman Urdu)
-  if (/today'?s?\s+(sales|revenue|report)/i.test(lower) || /(sales|revenue|report)\s+(of\s+)?today/i.test(lower) ||
-      /give\s+me\s+(today'?s?\s+)?(sales|revenue)/i.test(lower) || /how\s+much\s+sales\s+happened\s+today/i.test(lower) ||
-      /show\s+(today'?s?\s+)?(sales|revenue|report|top)/i.test(lower) ||
+  if (/today'?s?\s+(sales|revenue|report|data)/i.test(lower) || /(sales|revenue|report|data)\s+(of\s+)?today/i.test(lower) ||
+      /(give|send)\s+me\s+(today'?s?\s+)?(sales|revenue|data)/i.test(lower) || /show\s+(today'?s?\s+)?(sales|revenue|report|data|top)/i.test(lower) ||
+      /how\s+much\s+sales\s+happened\s+today/i.test(lower) ||
       /(what\s+product\s+generated|top\s+product|best\s+selling)\s+.*today/i.test(lower) ||
-      /today.*(sales|revenue|top\s+product|best\s+selling)/i.test(lower) ||
+      /today.*(sales|revenue|data|top\s+product|best\s+selling)/i.test(lower) ||
       /revenue\s+generated\s+by\s+today/i.test(lower) || /revenue\s+generated\s+.*today/i.test(lower) ||
       /mujhy\s+aj\s+ki\s+sale\s+batao/i.test(lower) || /mujh[ehy]\s+aj\s+ki\s+sale\s+bata\s*do/i.test(lower) ||
       /aj\s+ki\s+sale\s+(batao|bata\s*do|bata\s*d[eo])/i.test(lower) || /aj\s+ka\s+sale\s+(report|batao|bata)/i.test(lower) ||
