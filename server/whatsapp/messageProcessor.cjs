@@ -1265,6 +1265,53 @@ async function processIncomingMessage(msg, client) {
           console.log("  → Error:", reply);
         }
       }
+    } else if (command.action === "sales_report_comparison") {
+      let todayData = null;
+      let yesterdayData = null;
+      try {
+        const [todayRes, yesterdayRes] = await Promise.all([
+          fetch(`${API_BASE}/api/sales/stats?period=today`),
+          fetch(`${API_BASE}/api/sales/stats?period=yesterday`),
+        ]);
+        todayData = todayRes.ok ? await todayRes.json().catch(() => ({})) : null;
+        yesterdayData = yesterdayRes.ok ? await yesterdayRes.json().catch(() => ({})) : null;
+      } catch (err) {
+        reply = `Could not reach POS API at ${API_BASE}. Ensure the POS server is running (npm start in server/).`;
+        console.log("  → Sales comparison: fetch failed", err?.message || err);
+      }
+      if (todayData && yesterdayData && !reply) {
+        const fmt = (n) => Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        const tRev = todayData.totalRevenue ?? 0;
+        const tProf = todayData.totalProfit ?? 0;
+        const tOrd = todayData.salesCount ?? 0;
+        const yRev = yesterdayData.totalRevenue ?? 0;
+        const yProf = yesterdayData.totalProfit ?? 0;
+        const yOrd = yesterdayData.salesCount ?? 0;
+        const diffRev = tRev - yRev;
+        const diffProf = tProf - yProf;
+        const diffOrd = tOrd - yOrd;
+        const todayLabel = todayData.reportDateLabel || todayData.reportDate || "Today";
+        const yesterdayLabel = yesterdayData.reportDateLabel || yesterdayData.reportDate || "Yesterday (Kal)";
+        const arrow = (n) => (n > 0 ? "↑" : n < 0 ? "↓" : "→");
+        const parts = [
+          "📊 *Today vs Yesterday (Kal) Comparison*",
+          "",
+          `*Today (${todayLabel})*`,
+          `Revenue: Rs ${fmt(tRev)} | Profit: Rs ${fmt(tProf)} | Orders: ${tOrd}`,
+          "",
+          `*Yesterday (${yesterdayLabel})*`,
+          `Revenue: Rs ${fmt(yRev)} | Profit: Rs ${fmt(yProf)} | Orders: ${yOrd}`,
+          "",
+          "*Difference (Today - Yesterday)*",
+          `Revenue: Rs ${fmt(Math.abs(diffRev))} ${arrow(diffRev)}`,
+          `Profit: Rs ${fmt(Math.abs(diffProf))} ${arrow(diffProf)}`,
+          `Orders: ${Math.abs(diffOrd)} ${arrow(diffOrd)}`,
+        ];
+        reply = parts.join("\n");
+        console.log(`  → Sales comparison: today Rs ${tRev} vs yesterday Rs ${yRev}, diff Rs ${diffRev}`);
+      } else if (!reply) {
+        reply = "Could not fetch sales data for comparison. Is the POS server running?";
+      }
     } else if (command.action === "sales_report_today" || command.action === "sales_report_yesterday" || command.action === "sales_report_day_before_yesterday") {
       const periodMap = { sales_report_today: "today", sales_report_yesterday: "yesterday", sales_report_day_before_yesterday: "day_before_yesterday" };
       const period = periodMap[command.action];
@@ -1294,6 +1341,18 @@ async function processIncomingMessage(msg, client) {
 
           const titleMap = { today: "Today's", yesterday: "Yesterday's (Kal)", day_before_yesterday: "Day Before Yesterday's (Parso)" };
           const title = titleMap[period] || "Sales";
+          const targetDate = data.reportDate;
+          let expensesTotal = 0;
+          let expensesList = [];
+          try {
+            const expRes = await fetch(`${API_BASE}/api/expenses?from=${targetDate}&to=${targetDate}`);
+            if (expRes.ok) {
+              const expenses = await expRes.json().catch(() => []);
+              expensesTotal = (expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+              expensesList = (expenses || []).slice(0, 5);
+            }
+          } catch (_) {}
+          const netAfterExpenses = profit - expensesTotal;
           const parts = [
             `📊 *${title} Sales Report*`,
             `*Date: ${dateLabel}*`,
@@ -1307,6 +1366,15 @@ async function processIncomingMessage(msg, client) {
             parts.push("*Most Sold:*", `${top.productName} — ${top.quantitySold || 0} units (Rs ${fmt(top.revenue)})`, "");
           }
           parts.push("Payment:", `Cash Rs ${fmt(cash)} | Card Rs ${fmt(card)}`);
+          parts.push("");
+          parts.push("*Expenses:* Rs " + fmt(expensesTotal));
+          if (expensesList.length > 0) {
+            for (const e of expensesList) {
+              parts.push(`  • ${e.description || e.category || "Expense"}: Rs ${fmt(e.amount)}`);
+            }
+          }
+          parts.push("");
+          parts.push(`*Net (Profit − Expenses):* Rs ${fmt(netAfterExpenses)}`);
           reply = parts.join("\n");
           console.log(`  → Sales report (${period}): ${orders} orders, Rs ${revenue} revenue, Rs ${profit} profit`);
         }
@@ -1608,6 +1676,7 @@ async function processIncomingMessage(msg, client) {
         "• *give me today's sales* – today's report (date, revenue, profit, top product)",
         "• *mujhy kal ki sale batao* – yesterday's (kal) report",
         "• *parso ki sale batao* – day before yesterday's (parso) report",
+        "• *mujhy aj or kal ki sales ka faraq batao* – today vs yesterday comparison (revenue, profit, orders)",
         "• *show sales report today* – same as above",
         "",
         "*Khata (In-Out / Pending Payments):*",

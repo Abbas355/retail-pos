@@ -21,10 +21,11 @@ Allowed tools (ONLY these – do not invent others):
 12. sales_report_today – User asks for today's sales/revenue/report. No extra params.
 13. sales_report_yesterday – User asks for yesterday's (kal) sales report. No extra params.
 14. sales_report_day_before_yesterday – User asks for day before yesterday's (parso) sales report. No extra params.
-15. list_open_bills – User asks for open bills, list of customers with open bills (e.g. "kitne bills khule hain", "open bills", "list bills", "khule hue bills bata do"). No extra params.
-16. khata_list_pending – List ALL customers with pending payments (outstanding balance). Use when user asks for the FULL list without a specific name. Examples: "mujhe khata batao kis ka kitna rehta hai", "acha mujhe na woh khata batao kis ka kitna rehta hai", "mujhy khat bata kiska kitna rehta ha", "give me customers whose payments are pending", "pending payments list". No extra params.
-17. khata_customer – Show a SPECIFIC customer's khata (balance/udhaar). Use ONLY when user says a customer NAME (e.g. Talha, Ali). Needs: customerName (string). Examples: "Talha ka khata bata do kitna rehta hai", "acha yar mujhe Talha ka khata bata do", "Ali ka balance", "Usman ka udhaar kitna hai". IMPORTANT: If user asks "kis ka kitna rehta hai" or "kiska kitna rehta ha" WITHOUT a name, return khata_list_pending, NOT khata_customer.
-18. voice_sale (use intent "create_sale") – Your responsibility: understand the context, listen to the WHOLE message, and extract EACH product mentioned. Do not take one or two products – take EVERY product from the message. A single message may contain MULTIPLE products; all belong to the SAME sale. Never return only one or two items when the user said three or more (e.g. "3 breads 2 eggs 1 Coca-Cola" must yield three items).
+15. sales_report_comparison – User asks to COMPARE today vs yesterday (sales, revenue, profit, faraq/difference). Examples: "mujhy aj or kal ki sales ka faraq batao", "today vs yesterday profit", "aj aur kal ka profit btao", "difference batao aj kal". No extra params.
+16. list_open_bills – User asks for open bills, list of customers with open bills (e.g. "kitne bills khule hain", "open bills", "list bills", "khule hue bills bata do"). No extra params.
+17. khata_list_pending – List ALL customers with pending payments (outstanding balance). Use when user asks for the FULL list without a specific name. Examples: "mujhe khata batao kis ka kitna rehta hai", "acha mujhe na woh khata batao kis ka kitna rehta hai", "mujhy khat bata kiska kitna rehta ha", "give me customers whose payments are pending", "pending payments list". No extra params.
+18. khata_customer – Show a SPECIFIC customer's khata (balance/udhaar). Use ONLY when user says a customer NAME (e.g. Talha, Ali). Needs: customerName (string). Examples: "Talha ka khata bata do kitna rehta hai", "acha yar mujhe Talha ka khata bata do", "Ali ka balance", "Usman ka udhaar kitna hai". IMPORTANT: If user asks "kis ka kitna rehta hai" or "kiska kitna rehta ha" WITHOUT a name, return khata_list_pending, NOT khata_customer.
+19. voice_sale (use intent "create_sale") – Your responsibility: understand the context, listen to the WHOLE message, and extract EACH product mentioned. Do not take one or two products – take EVERY product from the message. A single message may contain MULTIPLE products; all belong to the SAME sale. Never return only one or two items when the user said three or more (e.g. "3 breads 2 eggs 1 Coca-Cola" must yield three items).
 
    Before responding, read the ENTIRE message. Words like "aur", "and", commas, or separate numbers indicate different items. Never stop after the first product; continue until all items are extracted.
 
@@ -38,7 +39,7 @@ Allowed tools (ONLY these – do not invent others):
    Example: "3 anday 2 bread aur 1 aquafina bech do payment cash" → {"intent":"create_sale","items":[{"product":"eggs","quantity":3},{"product":"bread","quantity":2},{"product":"aquafina","quantity":1}],"payment_method":"cash"}
 
    If you cannot extract any product, return: {"intent":"create_sale","items":[],"payment_method":"unknown"}
-19. help – Show command help. No extra params.
+20. help – Show command help. No extra params.
 
 CRITICAL – Product name extraction (MUST follow strictly):
 - The "name" field must be ONLY the product name – usually 1-2 words (e.g. talha, lazania, milk, bread, cooking oil).
@@ -88,6 +89,7 @@ Rules:
   - Roman Urdu: "mujhy aj ki sale batao" / "aj ki sale bata do" / "aj ka sale report" / "aj kitna sale hua" → {"action":"sales_report_today"}
   - Yesterday: "give me yesterday's sales" / "mujhy kal ki sale batao" / "kal ka sale report" → {"action":"sales_report_yesterday"}
   - Day before yesterday: "parso ki sale batao" / "parson ka report" / "day before yesterday sales" → {"action":"sales_report_day_before_yesterday"}
+  - Comparison (today vs yesterday): "mujhy aj or kal ki sales ka faraq batao" / "aj aur kal ka profit btao" / "today vs yesterday sales" / "difference batao aj kal" / "aj or kal ka profit batao" → {"action":"sales_report_comparison"}
   - "kitne bills khule hain" / "open bills" / "list bills" / "khule hue bills bata do" / "show open bills" → {"action":"list_open_bills"}
   - "mujhe khata batao kis ka kitna rehta hai" / "acha mujhe na woh khata batao kis ka kitna rehta hai" / "mujhy khat bata kiska kitna rehta ha" (no name = list all) → {"action":"khata_list_pending"}
   - "give me customers whose payments are pending" / "pending payments list" / "jinke payments pending hain" → {"action":"khata_list_pending"}

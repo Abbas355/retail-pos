@@ -19,8 +19,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { salesApi } from "@/lib/api";
-import { BarChart3, TrendingUp, DollarSign, Filter } from "lucide-react";
+import { salesApi, expensesApi } from "@/lib/api";
+import { BarChart3, TrendingUp, DollarSign, Filter, Wallet } from "lucide-react";
 
 type DatePreset = "today" | "thisWeek" | "thisMonth" | "last7" | "last30" | "custom";
 
@@ -91,6 +91,15 @@ const ReportsPage = () => {
     refetchOnWindowFocus: true,
     refetchInterval: 15000,
   });
+  const dateRange = useMemo(
+    () => getDateRange(datePreset, customFrom || undefined, customTo || undefined),
+    [datePreset, customFrom, customTo]
+  );
+  const { data: apiExpenses = [] } = useQuery({
+    queryKey: ["expenses", dateRange.from, dateRange.to],
+    queryFn: () => expensesApi.list({ from: dateRange.from, to: dateRange.to }),
+    refetchOnWindowFocus: true,
+  });
   const sales: Sale[] = (apiSales as any[]).map((s) => ({
     id: s.id,
     items: (s.items || []).map((i: any) => ({
@@ -117,11 +126,6 @@ const ReportsPage = () => {
     sales.forEach((s) => s.cashier && set.add(s.cashier));
     return Array.from(set).sort();
   }, [sales]);
-
-  const dateRange = useMemo(
-    () => getDateRange(datePreset, customFrom || undefined, customTo || undefined),
-    [datePreset, customFrom, customTo]
-  );
 
   const filteredSales = useMemo(() => {
     return sales.filter((s) => {
@@ -178,14 +182,18 @@ const ReportsPage = () => {
   };
 
   const stats = calcStats(filteredSales);
+  const totalExpenses = (apiExpenses as { amount: number }[]).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const netAfterExpenses = stats.profit - totalExpenses;
 
   const StatCards = ({ label }: { label: string }) => (
-    <div className="grid gap-4 sm:grid-cols-4 mb-6">
+    <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 mb-6">
       {[
         { title: `${label} Sales`, value: stats.count },
         { title: "Revenue", value: `$${stats.revenue.toFixed(2)}` },
         { title: "Cost", value: `$${stats.cost.toFixed(2)}` },
         { title: "Profit", value: `$${stats.profit.toFixed(2)}` },
+        { title: "Expenses", value: `$${totalExpenses.toFixed(2)}` },
+        { title: "Net (Profit − Expenses)", value: `$${netAfterExpenses.toFixed(2)}` },
       ].map((s) => (
         <div key={s.title} className="stat-card">
           <p className="text-sm text-muted-foreground">{s.title}</p>
@@ -404,6 +412,39 @@ const ReportsPage = () => {
           </div>
 
           <SalesTable salesList={filteredSales} />
+
+          {(apiExpenses as any[]).length > 0 && (
+            <div className="card-elevated overflow-hidden">
+              <h2 className="font-heading text-lg font-semibold p-4 pb-0 flex items-center gap-2">
+                <Wallet className="h-5 w-5" /> Expenses in this period
+              </h2>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(apiExpenses as any[])
+                    .slice()
+                    .reverse()
+                    .map((e: any) => (
+                      <TableRow key={e.id}>
+                        <TableCell>{e.date ? formatDateTimePK(e.date) : "—"}</TableCell>
+                        <TableCell className="font-medium">{e.category ?? "—"}</TableCell>
+                        <TableCell>{e.description || "—"}</TableCell>
+                        <TableCell className="text-right font-semibold">
+                          ${Number(e.amount ?? 0).toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </>
       )}
     </div>

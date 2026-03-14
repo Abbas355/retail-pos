@@ -193,6 +193,19 @@ function parseCommand(text) {
     return { action: "khata_list_pending" };
   }
 
+  // --- Sales report comparison (today vs yesterday) — check before single-day
+  if (/(today|aj|today'?s?)\s*(or|vs|versus|and|aur)\s*(yesterday|kal|yesterday'?s?)/i.test(lower) ||
+      /(yesterday|kal)\s*(or|vs|versus|and|aur)\s*(today|aj)/i.test(lower) ||
+      /(aj|today)\s+(or|aur)\s+(kal|yesterday)\s+(ki\s+)?(sales?|revenue|profit)\s+(ka\s+)?(faraq|farq|difference)/i.test(lower) ||
+      /(faraq|farq|difference)\s+(batao|bata\s*do|btao|bta\s*do)/i.test(lower) && (lower.includes("aj") || lower.includes("kal") || lower.includes("today") || lower.includes("yesterday")) ||
+      /(aj|today)\s+(or|aur)\s+(kal|yesterday)\s+ka\s+(profit|revenue|sales?)\s+(batao|btao|bata\s*do)/i.test(lower) ||
+      /(today|yesterday)\s+vs\s+(yesterday|today)\s+(sales?|revenue|profit)/i.test(lower) ||
+      /compare\s+(today|yesterday)\s+(and|or)\s+(yesterday|today)/i.test(lower) ||
+      /mujhy\s+aj\s+(or|aur)\s+kal\s+(ki\s+)?(sales?|profit)\s+(ka\s+)?(faraq|farq)\s+(batao|bata\s*do)/i.test(lower) ||
+      /mujhy\s+aj\s+(or|aur)\s+kal\s+ka\s+(profit|revenue)\s+btao/i.test(lower)) {
+    return { action: "sales_report_comparison" };
+  }
+
   // --- Sales report today (English + Roman Urdu)
   if (/today'?s?\s+(sales|revenue|report)/i.test(lower) || /(sales|revenue|report)\s+(of\s+)?today/i.test(lower) ||
       /give\s+me\s+(today'?s?\s+)?(sales|revenue)/i.test(lower) || /how\s+much\s+sales\s+happened\s+today/i.test(lower) ||
