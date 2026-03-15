@@ -1,11 +1,11 @@
 /**
  * ESC/POS receipt for BIXOLON SRP-352plusIII, raw TCP IP:9100.
- * Uses actual printable width (32 chars) for raw mode to prevent price wrap.
+ * Uses 48-char line width (matches working sample) for full-width centered layout.
  */
 
 import iconv from "iconv-lite";
 
-const WIDTH = 32;
+const WIDTH = 48;
 
 const ESC = "\x1b";
 const GS = "\x1d";
@@ -31,6 +31,11 @@ function escapeText(s) {
     .trim();
 }
 
+function centerText(text, width) {
+  const pad = Math.max(0, Math.floor((width - text.length) / 2));
+  return " ".repeat(pad) + text;
+}
+
 function formatLine(left, right, width) {
   const maxLeft = width - right.length - 1;
   const safeLeft = left.length > maxLeft ? left.slice(0, maxLeft) : left;
@@ -49,10 +54,8 @@ export function buildReceiptEscPos(sale, settings, locale = "en") {
   out.push(GS + "!\x00");
   out.push(ESC + "a\x00");
 
-  out.push(ESC + "a\x01");
-  out.push(escapeText(storeName) + LF);
-  out.push(escapeText(formatDateTimePK(sale.date)) + LF);
-  out.push(ESC + "a\x00");
+  out.push(centerText(escapeText(storeName), WIDTH) + LF);
+  out.push(centerText(escapeText(formatDateTimePK(sale.date)), WIDTH) + LF);
 
   out.push(LF);
 
@@ -70,21 +73,17 @@ export function buildReceiptEscPos(sale, settings, locale = "en") {
   out.push(formatLine("Total", fmt(sale.total), WIDTH) + LF);
   out.push(LF);
 
-  out.push(ESC + "a\x01");
   const paymentText =
     sale.paidAmount != null && sale.paidAmount < sale.total
       ? `Paid: ${fmt(sale.paidAmount)} | Bal: ${fmt(sale.total - sale.paidAmount)}`
       : `Paid by ${sale.paymentMethod}`;
-  out.push(escapeText(paymentText) + LF);
-  out.push(escapeText("Cashier: " + (sale.cashier || "")) + LF);
-  out.push(ESC + "a\x00");
+  out.push(centerText(escapeText(paymentText), WIDTH) + LF);
+  out.push(centerText(escapeText("Cashier: " + (sale.cashier || "")), WIDTH) + LF);
 
   out.push(LF);
 
   const footer = (receiptFooter && receiptFooter.trim()) || "Thank you for your purchase!";
-  out.push(ESC + "a\x01");
-  out.push(escapeText(footer) + LF);
-  out.push(ESC + "a\x00");
+  out.push(centerText(escapeText(footer), WIDTH) + LF);
 
   out.push(LF.repeat(6));
   out.push(ESC + "d\x05");
