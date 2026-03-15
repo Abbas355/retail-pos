@@ -136,6 +136,40 @@ export const khataApi = {
         | { id: string; saleId: string; amount: number; paymentMethod: string; date: string | null; type: "payment" }
       >;
     }>(`/khata/customers/${encodeURIComponent(customerId)}`),
+  listSuppliers: () =>
+    fetchApi<{ id: string; name: string; phone: string | null; balance: number }[]>("/khata/suppliers"),
+  /** All unpaid/partial purchases with supplier (for grouped table, like customer ledger) */
+  getSupplierLedgerList: () =>
+    fetchApi<{
+      purchaseId: string;
+      supplierId: string;
+      supplierName: string;
+      items: string;
+      total: number;
+      paidAmount: number;
+      amountDue: number;
+      date: string | null;
+    }[]>("/khata/supplier-ledger"),
+  getSupplierLedger: (supplierId: string) =>
+    fetchApi<{
+      supplier: { id: string; name: string; phone: string | null };
+      balance: number;
+      ledger: Array<
+        | { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number; date: string | null; type: "purchase" }
+        | { id: string; purchaseId: string; amount: number; paymentMethod: string; date: string | null; type: "payment" }
+      >;
+    }>(`/khata/suppliers/${encodeURIComponent(supplierId)}`),
+  /** Cash in / advances returned – money received back (out is in Expenses) */
+  listCashIn: () =>
+    fetchApi<{ id: string; amount: number; note: string; date: string; createdAt: string | null }[]>("/khata/cash-in"),
+  createCashIn: (data: { amount: number; note?: string; date?: string; expenseId?: string }) =>
+    fetchApi<{ id: string; amount: number; note: string; date: string; createdAt: string | null }>("/khata/cash-in", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  /** Expenses with category Urgent/Other with balance still to be returned (given out, show in Khata Cash in) */
+  getAdvancesOut: () =>
+    fetchApi<{ id: string; amount: number; returnedAmount: number; balance: number; category: string; description: string; date: string }[]>("/khata/advances-out"),
 };
 
 export const purchasesApi = {
@@ -144,7 +178,14 @@ export const purchasesApi = {
     supplierId: string;
     items: { productId: string; productName: string; quantity: number; cost: number }[];
     total: number;
+    paidAmount?: number;
+    paymentMethod?: "cash" | "card";
   }) => fetchApi("/purchases", { method: "POST", body: JSON.stringify(data) }),
+  recordPayment: (purchaseId: string, data: { amount: number; paymentMethod?: "cash" | "card" }) =>
+    fetchApi<{
+      payment: { id: string; purchaseId: string; amount: number; paymentMethod: string };
+      purchase: { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number };
+    }>(`/purchases/${encodeURIComponent(purchaseId)}/payments`, { method: "POST", body: JSON.stringify(data) }),
 };
 
 export const expensesApi = {

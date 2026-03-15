@@ -108,11 +108,80 @@ async function ensureSourceColumnsMysql() {
   }
 }
 
+/** Ensure purchases has paid_amount and payment_status for supplier khata (MySQL). */
+async function ensurePurchasesKhataColumnsMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query("ALTER TABLE purchases ADD COLUMN paid_amount DECIMAL(10,2) NOT NULL DEFAULT 0");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("purchases.paid_amount:", e.message);
+  }
+  try {
+    await query("ALTER TABLE purchases ADD COLUMN payment_status VARCHAR(20) NOT NULL DEFAULT 'unpaid'");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("purchases.payment_status:", e.message);
+  }
+}
+
+/** Ensure supplier_payments table exists (MySQL). */
+async function ensureSupplierPaymentsTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS supplier_payments (
+      id VARCHAR(64) PRIMARY KEY,
+      purchase_id VARCHAR(36) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      payment_method VARCHAR(20) NOT NULL DEFAULT 'cash',
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      source VARCHAR(20) NULL,
+      FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureSupplierPaymentsTableMysql:", e.message);
+  }
+}
+
+/** Ensure cash_in table exists (advances returned – Khata). */
+async function ensureCashInTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS cash_in (
+      id VARCHAR(64) PRIMARY KEY,
+      amount DECIMAL(10,2) NOT NULL,
+      note VARCHAR(512) NULL,
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureCashInTableMysql:", e.message);
+  }
+}
+
+/** Expenses with category Urgent/Other can be marked returned (partial via returned_amount). */
+async function ensureExpensesReturnedAtMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query("ALTER TABLE expenses ADD COLUMN returned_at DATETIME NULL");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("expenses.returned_at:", e.message);
+  }
+  try {
+    await query("ALTER TABLE expenses ADD COLUMN returned_amount DECIMAL(10,2) NOT NULL DEFAULT 0");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("expenses.returned_amount:", e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server listening on port ${PORT}`);
   await ensureDefaultUserIfSqlite();
   await ensureActivityLogTableMysql();
   await ensureSourceColumnsMysql();
+  await ensurePurchasesKhataColumnsMysql();
+  await ensureSupplierPaymentsTableMysql();
+  await ensureCashInTableMysql();
+  await ensureExpensesReturnedAtMysql();
   await syncFromMysqlIfConfigured();
 });

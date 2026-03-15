@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   currencySymbol: "$",
   defaultLowStockThreshold: 5,
   receiptHeader: "",
-  receiptFooter: "Thank you for your purchase!",
+  receiptFooter: "Thanks for your purchase!",
   autoSync: true,
 };
 

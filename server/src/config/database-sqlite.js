@@ -64,6 +64,23 @@ function ensureExpensesTable() {
 }
 ensureExpensesTable();
 
+/** Expenses with category Urgent/Other can be marked returned when cash in is recorded. */
+function ensureExpensesReturnedAt() {
+  try {
+    const info = db.prepare("PRAGMA table_info(expenses)").all();
+    const names = info.map((c) => c.name);
+    if (!names.includes("returned_at")) {
+      db.exec("ALTER TABLE expenses ADD COLUMN returned_at TEXT NULL");
+    }
+    if (!names.includes("returned_amount")) {
+      db.exec("ALTER TABLE expenses ADD COLUMN returned_amount REAL NOT NULL DEFAULT 0");
+    }
+  } catch (e) {
+    if (!/duplicate column|no such column/i.test(e.message)) throw e;
+  }
+}
+ensureExpensesReturnedAt();
+
 /** Ensure products.barcode column exists (for DBs created before barcode feature). */
 function ensureProductsBarcodeColumn() {
   try {
@@ -134,6 +151,61 @@ function ensureSourceColumns() {
   }
 }
 ensureSourceColumns();
+
+/** Ensure purchases has paid_amount and payment_status for supplier khata. */
+function ensurePurchasesKhataColumns() {
+  try {
+    const info = db.prepare("PRAGMA table_info(purchases)").all();
+    const names = info.map((c) => c.name);
+    if (!names.includes("paid_amount")) {
+      db.exec("ALTER TABLE purchases ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0");
+    }
+    if (!names.includes("payment_status")) {
+      db.exec("ALTER TABLE purchases ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'unpaid'");
+    }
+  } catch (e) {
+    if (!/duplicate column|no such column/i.test(e.message)) throw e;
+  }
+}
+ensurePurchasesKhataColumns();
+
+/** Ensure supplier_payments table exists for supplier khata payment history. */
+function ensureSupplierPaymentsTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS supplier_payments (
+    id TEXT PRIMARY KEY,
+    purchase_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    source TEXT,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
+  )`;
+  try {
+    db.exec(sql);
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureSupplierPaymentsTable();
+
+/** Ensure cash_in table exists (advances returned – money received back, out is in Expenses). */
+function ensureCashInTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS cash_in (
+    id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    note TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now'))
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cash_in_date ON cash_in(date)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureCashInTable();
 
 /** Ensure activity_log table exists for delete/undo audit events. */
 function ensureActivityLogTable() {

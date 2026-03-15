@@ -471,6 +471,35 @@ function parseCommand(text) {
     }
   }
 
+  // --- Voice purchase: "acha yar ma ny X supplier sy 50 aquafina khareedi hein" / "maine X supplier se 50 aquafina khareedi"
+  const voicePurchaseMaNy = trimmed.match(/(?:acha\s+yar\s+)?(?:ma\s*ny|maine|mene)\s+(.+?)\s+supplier\s+sy\s+(\d+|[a-zA-Z]+)\s+(.+?)\s+khareed/i);
+  if (voicePurchaseMaNy) {
+    const supplierName = voicePurchaseMaNy[1].trim();
+    const qtySegment = `${voicePurchaseMaNy[2]} ${voicePurchaseMaNy[3].trim()}`;
+    const { quantity, name: productName } = parseQuantityFromSegment(qtySegment);
+    if (supplierName && !/^\d+$/.test(supplierName) && productName && quantity >= 1) {
+      return { action: "voice_purchase", supplierName, items: [{ name: productName, quantity }] };
+    }
+  }
+  const voicePurchaseSupplierSy = trimmed.match(/(.+?)\s+supplier\s+sy\s+(\d+|[a-zA-Z]+)\s+(.+?)\s+khareed/i);
+  if (voicePurchaseSupplierSy) {
+    const supplierName = voicePurchaseSupplierSy[1].trim();
+    const qtySegment = `${voicePurchaseSupplierSy[2]} ${voicePurchaseSupplierSy[3].trim()}`;
+    const { quantity, name: productName } = parseQuantityFromSegment(qtySegment);
+    if (supplierName && !/^\d+$/.test(supplierName) && productName && quantity >= 1) {
+      return { action: "voice_purchase", supplierName, items: [{ name: productName, quantity }] };
+    }
+  }
+  const voicePurchaseSe = trimmed.match(/(?:acha\s+yar\s+)?(?:ma\s*ny|maine|mene)\s+(.+?)\s+supplier\s+se\s+(\d+|[a-zA-Z]+)\s+(.+?)\s+khareed/i);
+  if (voicePurchaseSe) {
+    const supplierName = voicePurchaseSe[1].trim();
+    const qtySegment = `${voicePurchaseSe[2]} ${voicePurchaseSe[3].trim()}`;
+    const { quantity, name: productName } = parseQuantityFromSegment(qtySegment);
+    if (supplierName && !/^\d+$/.test(supplierName) && productName && quantity >= 1) {
+      return { action: "voice_purchase", supplierName, items: [{ name: productName, quantity }] };
+    }
+  }
+
   // --- Add product (text: "add product milk 50", "add product lazania 100 50" with optional threshold)
   // Reject if name contains descriptive words – let intent handle natural language (e.g. "talha it's price should be 60000")
   const addWithThreshold = trimmed.match(/^add\s+(?:the\s+)?product\s+(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s*$/i);

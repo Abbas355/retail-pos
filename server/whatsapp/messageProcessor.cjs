@@ -23,6 +23,8 @@ const pendingBills = new Map();
 const pendingWhichCustomer = new Map();
 /** Pending delete confirmations: from -> { productId, productName, at } */
 const pendingDeletes = new Map();
+/** Pending new-supplier confirmation for voice purchase: from -> { supplierName, items: [{ name, quantity }], at } */
+const pendingNewSupplierPurchase = new Map();
 /** Action history for undo: from -> [{ action, label, payload }], max 3 per user */
 const actionHistory = new Map();
 const MAX_ACTION_HISTORY = 3;
@@ -74,6 +76,16 @@ function getPendingDelete(from) {
   if (!entry) return null;
   if (Date.now() - (entry.at || 0) > PENDING_EXPIRY_MS) {
     pendingDeletes.delete(from);
+    return null;
+  }
+  return entry;
+}
+
+function getPendingNewSupplierPurchase(from) {
+  const entry = pendingNewSupplierPurchase.get(from);
+  if (!entry) return null;
+  if (Date.now() - (entry.at || 0) > PENDING_EXPIRY_MS) {
+    pendingNewSupplierPurchase.delete(from);
     return null;
   }
   return entry;
@@ -338,6 +350,89 @@ async function processIncomingMessage(msg, client) {
   }
 
   const bodyUpper = body.trim().toUpperCase();
+  const bodyLower = body.trim().toLowerCase();
+  const isYesLike = /^(yes|haan|ha|han|ji|sahi|theek)\s*$/i.test(body.trim());
+  const isNoLike = /^(no|nahi|nah|nhi|cancel)\s*$/i.test(body.trim());
+  const pendingNewSupplier = getPendingNewSupplierPurchase(msg.from);
+  if (isNoLike && pendingNewSupplier) {
+    pendingNewSupplierPurchase.delete(msg.from);
+    await client.sendMessage(msg.from, "Purchase cancelled. You can say the purchase again with an existing supplier name.");
+    return;
+  }
+  if (isYesLike && pendingNewSupplier) {
+    pendingNewSupplierPurchase.delete(msg.from);
+    const { supplierName, items: purchaseItems } = pendingNewSupplier;
+    try {
+      const createSupRes = await fetch(`${API_BASE}/api/suppliers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Source": "whatsapp" },
+        body: JSON.stringify({ name: supplierName, source: "whatsapp" }),
+      });
+      const supData = await createSupRes.json().catch(() => ({}));
+      if (!createSupRes.ok || !supData.id) {
+        await client.sendMessage(msg.from, supData.error || "Could not add supplier. Try again.");
+        return;
+      }
+      const resProducts = await fetch(`${API_BASE}/api/products`);
+      const products = await resProducts.json().catch(() => []);
+      if (!resProducts.ok || !Array.isArray(products)) {
+        await client.sendMessage(msg.from, "Could not fetch products. Purchase cancelled.");
+        return;
+      }
+      const bodyItems = [];
+      const notFound = [];
+      for (const it of purchaseItems) {
+        const qty = Math.max(1, it.quantity || 1);
+        const closest = findClosestProduct(it.name || "", products);
+        const product = closest ? closest.product : null;
+        if (product) {
+          const cost = Number(product.cost ?? product.price ?? 0) || 0;
+          bodyItems.push({
+            productId: product.id,
+            product_name: product.name,
+            quantity: qty,
+            cost,
+          });
+        } else {
+          notFound.push(it.name || "?");
+        }
+      }
+      if (notFound.length > 0) {
+        await client.sendMessage(msg.from, `Product(s) not found: ${notFound.join(", ")}. Add them first with *add product <name> <price>* then try again.`);
+        return;
+      }
+      if (bodyItems.length === 0) {
+        await client.sendMessage(msg.from, "No valid items to record. Add products first.");
+        return;
+      }
+      const total = bodyItems.reduce((sum, i) => sum + i.quantity * i.cost, 0);
+      const purchaseRes = await fetch(`${API_BASE}/api/purchases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Source": "whatsapp" },
+        body: JSON.stringify({
+          supplierId: supData.id,
+          items: bodyItems,
+          total,
+          source: "whatsapp",
+          paidAmount: 0,
+          paymentMethod: "cash",
+        }),
+      });
+      const purchaseData = await purchaseRes.json().catch(() => ({}));
+      if (purchaseRes.ok) {
+        const itemStr = bodyItems.map((i) => `${i.quantity} ${i.product_name}`).join(", ");
+        await client.sendMessage(msg.from, `✅ *Purchase recorded!*\nSupplier: ${supplierName}\n${itemStr}\nTotal: Rs ${total.toFixed(2)}`);
+        console.log("  → Voice purchase (new supplier confirmed):", supplierName, bodyItems.length, "item(s)");
+      } else {
+        await client.sendMessage(msg.from, purchaseData.error || `Purchase failed (${purchaseRes.status}).`);
+      }
+    } catch (err) {
+      console.error("Voice purchase (new supplier yes) error:", err);
+      await client.sendMessage(msg.from, "Error recording purchase. Please try again.");
+    }
+    return;
+  }
+
   const pending = getPendingSale(msg.from);
   const isNoOrComplete = bodyUpper === "NO" || looksLikeNoCompleteBill(body);
   if ((bodyUpper === "YES" || bodyUpper === "NO") || (pending && isNoOrComplete)) {
@@ -1263,6 +1358,86 @@ async function processIncomingMessage(msg, client) {
         } else {
           reply = data.error || `Error: ${res.status}`;
           console.log("  → Error:", reply);
+        }
+      }
+    } else if (command.action === "voice_purchase") {
+      const supplierName = (command.supplierName || "").trim();
+      const items = Array.isArray(command.items) ? command.items : [];
+      if (!supplierName || items.length === 0) {
+        reply = "Supplier name and at least one item (product + quantity) are required. Example: *acha yar ma ny Ali supplier sy 50 aquafina khareedi hein*";
+      } else {
+        try {
+          const supRes = await fetch(`${API_BASE}/api/suppliers`);
+          const suppliers = await supRes.json().catch(() => []);
+          if (!supRes.ok || !Array.isArray(suppliers)) {
+            reply = "Could not fetch suppliers. Try again.";
+          } else {
+            const match = suppliers.find((s) => String(s.name || "").trim().toLowerCase() === supplierName.toLowerCase());
+            if (!match) {
+              pendingNewSupplierPurchase.set(msg.from, {
+                supplierName,
+                items: items.map((i) => ({ name: i.name || i.product, quantity: Math.max(1, i.quantity || 1) })),
+                at: Date.now(),
+              });
+              reply = `Naya supplier *"${supplierName}"* add karna hai? Reply *yes* to add and record purchase.`;
+              console.log("  → Voice purchase: asking to confirm new supplier", supplierName);
+            } else {
+              const resProducts = await fetch(`${API_BASE}/api/products`);
+              const products = await resProducts.json().catch(() => []);
+              if (!resProducts.ok || !Array.isArray(products)) {
+                reply = "Could not fetch products. Try again.";
+              } else {
+                const bodyItems = [];
+                const notFound = [];
+                for (const it of items) {
+                  const qty = Math.max(1, it.quantity || 1);
+                  const closest = findClosestProduct(it.name || it.product || "", products);
+                  const product = closest ? closest.product : null;
+                  if (product) {
+                    const cost = Number(product.cost ?? product.price ?? 0) || 0;
+                    bodyItems.push({
+                      productId: product.id,
+                      product_name: product.name,
+                      quantity: qty,
+                      cost,
+                    });
+                  } else {
+                    notFound.push(it.name || it.product || "?");
+                  }
+                }
+                if (notFound.length > 0) {
+                  reply = `Product(s) not found: ${notFound.join(", ")}. Add them first with *add product <name> <price>* then say the purchase again.`;
+                } else if (bodyItems.length === 0) {
+                  reply = "No valid items to record. Add products first.";
+                } else {
+                  const total = bodyItems.reduce((sum, i) => sum + i.quantity * i.cost, 0);
+                  const purchaseRes = await fetch(`${API_BASE}/api/purchases`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "X-Source": "whatsapp" },
+                    body: JSON.stringify({
+                      supplierId: match.id,
+                      items: bodyItems,
+                      total,
+                      source: "whatsapp",
+                      paidAmount: 0,
+                      paymentMethod: "cash",
+                    }),
+                  });
+                  const purchaseData = await purchaseRes.json().catch(() => ({}));
+                  if (purchaseRes.ok) {
+                    const itemStr = bodyItems.map((i) => `${i.quantity} ${i.product_name}`).join(", ");
+                    reply = `✅ *Purchase recorded!*\nSupplier: ${match.name}\n${itemStr}\nTotal: Rs ${total.toFixed(2)}`;
+                    console.log("  → Voice purchase:", match.name, bodyItems.length, "item(s)");
+                  } else {
+                    reply = purchaseData.error || `Purchase failed (${purchaseRes.status}).`;
+                  }
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Voice purchase error:", err);
+          reply = "Error recording purchase. Please try again.";
         }
       }
     } else if (command.action === "sales_report_comparison") {

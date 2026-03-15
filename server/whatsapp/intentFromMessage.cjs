@@ -39,7 +39,8 @@ Allowed tools (ONLY these – do not invent others):
    Example: "3 anday 2 bread aur 1 aquafina bech do payment cash" → {"intent":"create_sale","items":[{"product":"eggs","quantity":3},{"product":"bread","quantity":2},{"product":"aquafina","quantity":1}],"payment_method":"cash"}
 
    If you cannot extract any product, return: {"intent":"create_sale","items":[],"payment_method":"unknown"}
-20. help – Show command help. No extra params.
+20. voice_purchase (record_purchase) – User says they BOUGHT/purchased items FROM a supplier (not a sale to customer). Extract: supplierName (the supplier/person name), items (array of { product, quantity }). Use for: "acha yar ma ny X supplier sy 50 aquafina khareedi hein", "maine ABC supplier se 20 bread khareedi", "X supplier sy 50 aquafina khareed liya". Return: {"action":"voice_purchase","supplierName":"<name>","items":[{"product":"<productName>","quantity":<n>}]}. Quantity as number; if word (paanch, das) convert to digit. ONE or MORE items. Supplier name = text before "supplier sy/se", product = item name (e.g. aquafina, bread).
+21. help – Show command help. No extra params.
 
 CRITICAL – Product name extraction (MUST follow strictly):
 - The "name" field must be ONLY the product name – usually 1-2 words (e.g. talha, lazania, milk, bread, cooking oil).
@@ -102,6 +103,8 @@ Rules:
   - "teen anday do bread ek bottle aquafina bech do cash par" → {"intent":"create_sale","items":[{"product":"eggs","quantity":3},{"product":"bread","quantity":2},{"product":"aquafina","quantity":1}],"payment_method":"cash"}
   - If payment not mentioned → "payment_method":"unknown". If quantity missing for an item → quantity 1.
   - "help" → {"action":"help"}
+  - "acha yar ma ny Ali supplier sy 50 aquafina khareedi hein" → {"action":"voice_purchase","supplierName":"Ali","items":[{"product":"aquafina","quantity":50}]}
+  - "maine ABC Traders supplier se 20 bread khareedi" → {"action":"voice_purchase","supplierName":"ABC Traders","items":[{"product":"bread","quantity":20}]}
 - If the message is unclear or missing required params, return {"action":"unknown"}.
 - Reply with ONLY a single JSON object, no markdown, no explanation.`;
 
@@ -379,8 +382,9 @@ function parseIntentResponse(text) {
     if (!obj || typeof obj !== "object") return null;
     let action = (obj.action != null ? String(obj.action) : "").toLowerCase();
     if (obj.intent && (String(obj.intent).toLowerCase() === "sale" || String(obj.intent).toLowerCase() === "create_sale")) action = "voice_sale";
+    if (action === "record_purchase") action = "voice_purchase";
     if (!action) return null;
-    const allowed = ["add_product", "list_products", "low_stock", "search", "delete_product", "set_threshold", "set_stock", "add_customer", "add_customer_help", "add_supplier", "add_supplier_help", "add_expense", "sales_report_today", "sales_report_yesterday", "sales_report_day_before_yesterday", "sales_report_comparison", "list_open_bills", "khata_list_pending", "khata_customer", "voice_sale", "help", "out_of_scope", "unknown"];
+    const allowed = ["add_product", "list_products", "low_stock", "search", "delete_product", "set_threshold", "set_stock", "add_customer", "add_customer_help", "add_supplier", "add_supplier_help", "add_expense", "sales_report_today", "sales_report_yesterday", "sales_report_day_before_yesterday", "sales_report_comparison", "list_open_bills", "khata_list_pending", "khata_customer", "voice_sale", "voice_purchase", "help", "out_of_scope", "unknown"];
     if (!allowed.includes(action)) return null;
     if (action === "add_product") {
       let name = obj.name != null ? String(obj.name).trim() : "";
@@ -527,6 +531,21 @@ function parseIntentResponse(text) {
         return { action: "unknown" };
       }
       return { action: "voice_sale", items, paymentMethod, customerName: customerName || null, billAction, saleAction: "process_sale", saleConfidence: "high" };
+    }
+    if (action === "voice_purchase") {
+      const supplierName = obj.supplierName != null ? String(obj.supplierName).trim() : "";
+      const rawItems = Array.isArray(obj.items) ? obj.items : [];
+      const items = rawItems
+        .filter((it) => it && (it.product != null || it.name != null))
+        .map((it) => {
+          const name = String(it.product != null ? it.product : it.name || "").trim();
+          const q = it.quantity;
+          const quantity = q === null || q === undefined ? 1 : Math.max(1, parseInt(q, 10) || Number(q) || 1);
+          return { name, quantity };
+        })
+        .filter((it) => it.name.length > 0);
+      if (!supplierName || items.length === 0) return { action: "unknown" };
+      return { action: "voice_purchase", supplierName: sanitizeSupplierName(supplierName), items };
     }
     if (["list_products", "low_stock", "add_customer_help", "add_supplier_help", "sales_report_today", "sales_report_yesterday", "sales_report_day_before_yesterday", "sales_report_comparison", "list_open_bills", "khata_list_pending", "help", "out_of_scope", "unknown"].includes(action)) {
       return { action };

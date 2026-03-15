@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/settings";
 import { formatDatePK } from "@/lib/utils";
 
-const DEFAULT_CATEGORIES = ["Rent", "Utilities", "Salaries", "Supplies", "Maintenance", "Other"];
+const DEFAULT_CATEGORIES = ["Urgent", "Other", "Rent", "Utilities", "Salaries", "Supplies", "Maintenance"];
 
 const ExpensesPage = () => {
   const queryClient = useQueryClient();
