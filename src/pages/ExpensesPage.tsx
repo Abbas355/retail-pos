@@ -40,6 +40,7 @@ const ExpensesPage = () => {
       expensesApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["khata"] });
       setDialogOpen(false);
       setForm({ amount: "", category: "", description: "" });
       toast.success("Expense added");
@@ -51,6 +52,7 @@ const ExpensesPage = () => {
     mutationFn: (id: string) => expensesApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["khata"] });
       setDeleteTarget(null);
       toast.success("Expense deleted");
     },

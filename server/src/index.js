@@ -173,6 +173,80 @@ async function ensureExpensesReturnedAtMysql() {
   }
 }
 
+/** Manual khata entries per customer (Digi Khata style). */
+async function ensureCustomerKhataEntriesTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS customer_khata_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      customer_id VARCHAR(36) NOT NULL,
+      type VARCHAR(20) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      note VARCHAR(512) NULL,
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureCustomerKhataEntriesTableMysql:", e.message);
+  }
+}
+
+/** General in/out khata entries. */
+async function ensureKhataEntriesTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS khata_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      type VARCHAR(10) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      note VARCHAR(512) NULL,
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      link_type VARCHAR(20) NOT NULL DEFAULT 'random',
+      link_id VARCHAR(64) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureKhataEntriesTableMysql:", e.message);
+  }
+}
+
+/** Manual khata entries per supplier. */
+async function ensureSupplierKhataEntriesTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS supplier_khata_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      supplier_id VARCHAR(36) NOT NULL,
+      type VARCHAR(20) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      note VARCHAR(512) NULL,
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureSupplierKhataEntriesTableMysql:", e.message);
+  }
+}
+
+/** Manual in/out entries for Cash in Khata. */
+async function ensureCashinKhataEntriesTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS cashin_khata_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      type VARCHAR(10) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      note VARCHAR(512) NULL,
+      date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureCashinKhataEntriesTableMysql:", e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server listening on port ${PORT}`);
@@ -183,5 +257,9 @@ app.listen(PORT, async () => {
   await ensureSupplierPaymentsTableMysql();
   await ensureCashInTableMysql();
   await ensureExpensesReturnedAtMysql();
+  await ensureCustomerKhataEntriesTableMysql();
+  await ensureKhataEntriesTableMysql();
+  await ensureSupplierKhataEntriesTableMysql();
+  await ensureCashinKhataEntriesTableMysql();
   await syncFromMysqlIfConfigured();
 });

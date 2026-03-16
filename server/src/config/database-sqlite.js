@@ -207,6 +207,88 @@ function ensureCashInTable() {
 }
 ensureCashInTable();
 
+/** Manual khata entries per customer (Digi Khata style: udhaar added / payment received). */
+function ensureCustomerKhataEntriesTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS customer_khata_entries (
+    id TEXT PRIMARY KEY,
+    customer_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('udhaar_added', 'payment_received')),
+    amount REAL NOT NULL,
+    note TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_customer_khata_entries_customer_id ON customer_khata_entries(customer_id)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureCustomerKhataEntriesTable();
+
+/** General in/out khata entries (random or linked to customer/supplier/cashin). */
+function ensureKhataEntriesTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS khata_entries (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+    amount REAL NOT NULL,
+    note TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    link_type TEXT NOT NULL DEFAULT 'random' CHECK (link_type IN ('random', 'customer', 'supplier', 'cashin')),
+    link_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_khata_entries_date ON khata_entries(date)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureKhataEntriesTable();
+
+/** Manual khata entries per supplier (same as customer: udhaar added / payment received). */
+function ensureSupplierKhataEntriesTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS supplier_khata_entries (
+    id TEXT PRIMARY KEY,
+    supplier_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('udhaar_added', 'payment_received')),
+    amount REAL NOT NULL,
+    note TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_supplier_khata_entries_supplier_id ON supplier_khata_entries(supplier_id)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureSupplierKhataEntriesTable();
+
+/** Manual in/out entries for Cash in Khata (statement timeline). */
+function ensureCashinKhataEntriesTable() {
+  const sql = `CREATE TABLE IF NOT EXISTS cashin_khata_entries (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+    amount REAL NOT NULL,
+    note TEXT,
+    date TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now'))
+  )`;
+  try {
+    db.exec(sql);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cashin_khata_entries_date ON cashin_khata_entries(date)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureCashinKhataEntriesTable();
+
 /** Ensure activity_log table exists for delete/undo audit events. */
 function ensureActivityLogTable() {
   const sql = `CREATE TABLE IF NOT EXISTS activity_log (

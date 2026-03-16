@@ -5,6 +5,251 @@ import { toDbDateTimePK, toIsoPK } from "../lib/dateUtils.js";
 const router = Router();
 const isSqlite = (process.env.DB_TYPE || "mysql").toLowerCase() === "sqlite";
 
+/** GET /api/khata/totals – total debit (money out) and credit (money in). Optional query: from, to (YYYY-MM-DD). */
+router.get("/totals", async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const hasRange = from && to && String(from).trim() && String(to).trim();
+    const dateFn = isSqlite ? "date" : "DATE";
+    const dateCol = isSqlite ? "date" : "`date`";
+    const buildWhere = () =>
+      hasRange ? ` WHERE ${dateFn}(${dateCol}) >= ? AND ${dateFn}(${dateCol}) <= ?` : "";
+    const params = hasRange ? [String(from).trim(), String(to).trim()] : [];
+
+    const [customerPayments] = await query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM sale_payments${buildWhere()}`,
+      params
+    );
+    const [cashIn] = await query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM cash_in${buildWhere()}`,
+      params
+    );
+    const [supplierPayments] = await query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM supplier_payments${buildWhere()}`,
+      params
+    );
+    const advancesWhere =
+      hasRange
+        ? ` WHERE category IN ('Urgent', 'Other') AND ${dateFn}(${dateCol}) >= ? AND ${dateFn}(${dateCol}) <= ?`
+        : " WHERE category IN ('Urgent', 'Other')";
+    const advancesParams = hasRange ? [String(from).trim(), String(to).trim()] : [];
+    const [advancesOut] = await query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses${advancesWhere}`,
+      advancesParams
+    );
+
+    const totalCredit =
+      (parseFloat(customerPayments?.total ?? 0) || 0) + (parseFloat(cashIn?.total ?? 0) || 0);
+    const totalDebit =
+      (parseFloat(supplierPayments?.total ?? 0) || 0) + (parseFloat(advancesOut?.total ?? 0) || 0);
+    res.json({ totalCredit, totalDebit });
+  } catch (err) {
+    console.error("Khata totals error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /api/khata/entries – list general in/out khata entries (newest first). Optional query: type (in|out), from, to. */
+router.get("/entries", async (req, res) => {
+  try {
+    const { type, from, to } = req.query;
+    const colDate = isSqlite ? "date" : "`date`";
+    const dateFn = isSqlite ? "date" : "DATE";
+    let sql = `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at FROM khata_entries WHERE 1=1`;
+    const params = [];
+    if (type && (type === "in" || type === "out")) {
+      sql += " AND type = ?";
+      params.push(type);
+    }
+    if (from && to && String(from).trim() && String(to).trim()) {
+      sql += ` AND ${dateFn}(${colDate}) >= ? AND ${dateFn}(${colDate}) <= ?`;
+      params.push(String(from).trim(), String(to).trim());
+    }
+    sql += ` ORDER BY entry_date DESC, created_at DESC`;
+    const rows = await query(sql, params);
+    const result = (rows || []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      amount: parseFloat(r.amount) || 0,
+      note: r.note ?? null,
+      date: r.entry_date ? new Date(r.entry_date).toISOString() : (r.created_at ? new Date(r.created_at).toISOString() : null),
+      linkType: r.link_type || "random",
+      linkId: r.link_id ?? null,
+    }));
+    res.json(result);
+  } catch (err) {
+    console.error("Khata entries list error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/khata/entries – create general in/out khata entry. */
+router.post("/entries", async (req, res) => {
+  try {
+    const { type, amount, note, date: reqDate, linkType, linkId } = req.body;
+    if (!type || (type !== "in" && type !== "out")) {
+      return res.status(400).json({ error: "type must be 'in' or 'out'" });
+    }
+    const amt = parseFloat(amount);
+    if (amount == null || Number.isNaN(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const link = linkType && ["random", "customer", "supplier", "cashin"].includes(String(linkType)) ? String(linkType) : "random";
+    const colDate = isSqlite ? "date" : "`date`";
+    const entryId = `khe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const dateVal = reqDate ? toDbDateTimePK(reqDate) : toDbDateTimePK(new Date());
+    const noteVal = note != null ? String(note).trim() : "";
+    const linkIdVal = linkId != null && String(linkId).trim() ? String(linkId).trim() : null;
+
+    await query(
+      `INSERT INTO khata_entries (id, type, amount, note, date, link_type, link_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [entryId, type, amt, noteVal, dateVal, link, linkIdVal]
+    );
+
+    const [row] = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at FROM khata_entries WHERE id = ?`,
+      [entryId]
+    );
+    const created = {
+      id: row.id,
+      type: row.type,
+      amount: parseFloat(row.amount),
+      note: row.note ?? null,
+      date: row.entry_date ? new Date(row.entry_date).toISOString() : (row.created_at ? new Date(row.created_at).toISOString() : null),
+      linkType: row.link_type || "random",
+      linkId: row.link_id ?? null,
+    };
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("Khata entry create error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** DELETE /api/khata/entries/:id – delete a general khata entry. */
+router.delete("/entries/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query("DELETE FROM khata_entries WHERE id = ?", [id]);
+    const deleted = result?.affectedRows ?? 0;
+    if (deleted === 0) {
+      return res.status(404).json({ error: "Entry not found" });
+    }
+    res.status(204).send();
+  } catch (err) {
+    console.error("Khata entry delete error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /api/khata/credit-entries – list of credit entries (customer payments + cash in). Same date filter as /totals. */
+router.get("/credit-entries", async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const hasRange = from && to && String(from).trim() && String(to).trim();
+    const dateFn = isSqlite ? "date" : "DATE";
+    const dateCol = isSqlite ? "date" : "`date`";
+    const colDate = isSqlite ? "date" : "`date`";
+    const whereClause = hasRange ? ` WHERE ${dateFn}(sp.${dateCol}) >= ? AND ${dateFn}(sp.${dateCol}) <= ?` : "";
+    const params = hasRange ? [String(from).trim(), String(to).trim()] : [];
+
+    const customerPayments = await query(
+      `SELECT sp.id, sp.amount, sp.${colDate} AS entry_date, sp.payment_method, c.name AS customer_name
+       FROM sale_payments sp
+       LEFT JOIN sales s ON s.id = sp.sale_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+       ${whereClause}
+       ORDER BY sp.${colDate} DESC`,
+      params
+    );
+    const cashInWhere = hasRange ? ` WHERE ${dateFn}(${dateCol}) >= ? AND ${dateFn}(${dateCol}) <= ?` : "";
+    const cashInParams = hasRange ? [String(from).trim(), String(to).trim()] : [];
+    const cashInRows = await query(
+      `SELECT id, amount, note, ${colDate} AS entry_date FROM cash_in ${cashInWhere} ORDER BY entry_date DESC`,
+      cashInParams
+    );
+
+    const creditFromPayments = (customerPayments || []).map((r) => ({
+      type: "customer_payment",
+      id: r.id,
+      date: toIsoPK(r.entry_date),
+      amount: parseFloat(r.amount) || 0,
+      description: r.customer_name || "Customer payment",
+      paymentMethod: r.payment_method,
+    }));
+    const creditFromCashIn = (cashInRows || []).map((r) => ({
+      type: "cash_in",
+      id: r.id,
+      date: toIsoPK(r.entry_date),
+      amount: parseFloat(r.amount) || 0,
+      description: r.note || "Cash in",
+    }));
+    const combined = [...creditFromPayments, ...creditFromCashIn].sort(
+      (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+    );
+    res.json(combined);
+  } catch (err) {
+    console.error("Khata credit-entries error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /api/khata/debit-entries – list of debit entries (supplier payments + advances/expenses). Same date filter as /totals. */
+router.get("/debit-entries", async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const hasRange = from && to && String(from).trim() && String(to).trim();
+    const dateFn = isSqlite ? "date" : "DATE";
+    const dateCol = isSqlite ? "date" : "`date`";
+    const colDate = isSqlite ? "date" : "`date`";
+    const whereClause = hasRange ? ` WHERE ${dateFn}(sp.${dateCol}) >= ? AND ${dateFn}(sp.${dateCol}) <= ?` : "";
+    const params = hasRange ? [String(from).trim(), String(to).trim()] : [];
+
+    const supplierPayments = await query(
+      `SELECT sp.id, sp.amount, sp.${colDate} AS entry_date, sp.payment_method, s.name AS supplier_name
+       FROM supplier_payments sp
+       LEFT JOIN purchases p ON p.id = sp.purchase_id
+       LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${whereClause}
+       ORDER BY sp.${colDate} DESC`,
+      params
+    );
+    const advancesWhere =
+      hasRange
+        ? ` WHERE category IN ('Urgent', 'Other') AND ${dateFn}(${dateCol}) >= ? AND ${dateFn}(${dateCol}) <= ?`
+        : " WHERE category IN ('Urgent', 'Other')";
+    const advancesParams = hasRange ? [String(from).trim(), String(to).trim()] : [];
+    const advanceRows = await query(
+      `SELECT id, amount, category, description, ${colDate} AS entry_date FROM expenses ${advancesWhere} ORDER BY entry_date DESC`,
+      advancesParams
+    );
+
+    const debitFromPayments = (supplierPayments || []).map((r) => ({
+      type: "supplier_payment",
+      id: r.id,
+      date: toIsoPK(r.entry_date),
+      amount: parseFloat(r.amount) || 0,
+      description: r.supplier_name || "Supplier payment",
+      paymentMethod: r.payment_method,
+    }));
+    const debitFromAdvances = (advanceRows || []).map((r) => ({
+      type: "advance",
+      id: r.id,
+      date: toIsoPK(r.entry_date),
+      amount: parseFloat(r.amount) || 0,
+      description: r.description || r.category || "Advance",
+      category: r.category,
+    }));
+    const combined = [...debitFromPayments, ...debitFromAdvances].sort(
+      (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+    );
+    res.json(combined);
+  } catch (err) {
+    console.error("Khata debit-entries error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /** GET /api/khata/ledger – all unpaid sales with customer, items, paid, due (for table view) */
 router.get("/ledger", async (_req, res) => {
   try {
@@ -91,7 +336,7 @@ router.get("/customers", async (_req, res) => {
   }
 });
 
-/** GET /api/khata/customers/:id – ledger for a customer: sales (credit/partial), payments */
+/** GET /api/khata/customers/:id – ledger for a customer: sales (credit/partial), payments, manual khata entries */
 router.get("/customers/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -109,7 +354,7 @@ router.get("/customers/:id", async (req, res) => {
       [id]
     );
 
-    const balance = sales.reduce((sum, s) => sum + (parseFloat(s.total) - (parseFloat(s.paid_amount) || 0)), 0);
+    let balanceFromSales = sales.reduce((sum, s) => sum + (parseFloat(s.total) - (parseFloat(s.paid_amount) || 0)), 0);
 
     const saleIds = sales.map((s) => s.id);
     let payments = [];
@@ -123,6 +368,20 @@ router.get("/customers/:id", async (req, res) => {
         saleIds
       );
     }
+
+    const manualEntries = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at
+       FROM customer_khata_entries
+       WHERE customer_id = ?
+       ORDER BY entry_date DESC, created_at DESC`,
+      [id]
+    );
+
+    const manualBalance = (manualEntries || []).reduce((sum, e) => {
+      const amt = parseFloat(e.amount) || 0;
+      return sum + (e.type === "udhaar_added" ? amt : -amt);
+    }, 0);
+    const balance = balanceFromSales + manualBalance;
 
     const salesForLedger = sales.map((s) => ({
       id: s.id,
@@ -143,7 +402,15 @@ router.get("/customers/:id", async (req, res) => {
       type: "payment",
     }));
 
-    const ledger = [...salesForLedger, ...paymentsForLedger].sort(
+    const manualForLedger = (manualEntries || []).map((e) => ({
+      id: e.id,
+      type: e.type,
+      amount: parseFloat(e.amount) || 0,
+      note: e.note ?? null,
+      date: e.entry_date ? new Date(e.entry_date).toISOString() : (e.created_at ? new Date(e.created_at).toISOString() : null),
+    }));
+
+    const ledger = [...salesForLedger, ...paymentsForLedger, ...manualForLedger].sort(
       (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
     );
 
@@ -154,6 +421,51 @@ router.get("/customers/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("Khata ledger error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/khata/customers/:id/entries – manual khata entry (udhaar_added | payment_received) */
+router.post("/customers/:id/entries", async (req, res) => {
+  try {
+    const { id: customerId } = req.params;
+    const { type, amount, note, date: reqDate } = req.body;
+    const validTypes = ["udhaar_added", "payment_received"];
+    if (!type || !validTypes.includes(String(type))) {
+      return res.status(400).json({ error: "type must be udhaar_added or payment_received" });
+    }
+    const amt = parseFloat(amount);
+    if (amount == null || Number.isNaN(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const customer = await query("SELECT id FROM customers WHERE id = ?", [customerId]);
+    if (!customer || customer.length === 0) {
+      return res.status(404).json({ error: "Customer not found" });
+    }
+    const colDate = isSqlite ? "date" : "`date`";
+    const entryId = `khe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const dateVal = reqDate ? toDbDateTimePK(reqDate) : toDbDateTimePK(new Date());
+    const noteVal = note != null ? String(note).trim() : "";
+
+    await query(
+      `INSERT INTO customer_khata_entries (id, customer_id, type, amount, note, date) VALUES (?, ?, ?, ?, ?, ?)`,
+      [entryId, customerId, type, amt, noteVal, dateVal]
+    );
+
+    const [row] = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at FROM customer_khata_entries WHERE id = ?`,
+      [entryId]
+    );
+    const created = {
+      id: row.id,
+      type: row.type,
+      amount: parseFloat(row.amount),
+      note: row.note ?? null,
+      date: row.entry_date ? new Date(row.entry_date).toISOString() : (row.created_at ? new Date(row.created_at).toISOString() : null),
+    };
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("Khata customer entry create error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -243,7 +555,7 @@ router.get("/suppliers", async (_req, res) => {
   }
 });
 
-/** GET /api/khata/suppliers/:id – ledger for a supplier: purchases (unpaid/partial), payments */
+/** GET /api/khata/suppliers/:id – ledger for a supplier: purchases (unpaid/partial), payments, manual entries */
 router.get("/suppliers/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -264,7 +576,7 @@ router.get("/suppliers/:id", async (req, res) => {
       [id]
     );
 
-    const balance = purchases.reduce(
+    let balanceFromPurchases = purchases.reduce(
       (sum, p) => sum + (parseFloat(p.total) - (parseFloat(p.paid_amount) || 0)),
       0
     );
@@ -281,6 +593,20 @@ router.get("/suppliers/:id", async (req, res) => {
         purchaseIds
       );
     }
+
+    const manualEntries = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at
+       FROM supplier_khata_entries
+       WHERE supplier_id = ?
+       ORDER BY entry_date DESC, created_at DESC`,
+      [id]
+    );
+
+    const manualBalance = (manualEntries || []).reduce((sum, e) => {
+      const amt = parseFloat(e.amount) || 0;
+      return sum + (e.type === "udhaar_added" ? amt : -amt);
+    }, 0);
+    const balance = balanceFromPurchases + manualBalance;
 
     const purchasesForLedger = purchases.map((p) => ({
       id: p.id,
@@ -301,7 +627,15 @@ router.get("/suppliers/:id", async (req, res) => {
       type: "payment",
     }));
 
-    const ledger = [...purchasesForLedger, ...paymentsForLedger].sort(
+    const manualForLedger = (manualEntries || []).map((e) => ({
+      id: e.id,
+      type: e.type,
+      amount: parseFloat(e.amount) || 0,
+      note: e.note ?? null,
+      date: e.entry_date ? new Date(e.entry_date).toISOString() : (e.created_at ? new Date(e.created_at).toISOString() : null),
+    }));
+
+    const ledger = [...purchasesForLedger, ...paymentsForLedger, ...manualForLedger].sort(
       (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
     );
 
@@ -312,6 +646,51 @@ router.get("/suppliers/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("Khata supplier ledger error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/khata/suppliers/:id/entries – manual supplier khata entry (udhaar_added | payment_received) */
+router.post("/suppliers/:id/entries", async (req, res) => {
+  try {
+    const { id: supplierId } = req.params;
+    const { type, amount, note, date: reqDate } = req.body;
+    const validTypes = ["udhaar_added", "payment_received"];
+    if (!type || !validTypes.includes(String(type))) {
+      return res.status(400).json({ error: "type must be udhaar_added or payment_received" });
+    }
+    const amt = parseFloat(amount);
+    if (amount == null || Number.isNaN(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const supplier = await query("SELECT id FROM suppliers WHERE id = ? AND deleted_at IS NULL", [supplierId]);
+    if (!supplier || supplier.length === 0) {
+      return res.status(404).json({ error: "Supplier not found" });
+    }
+    const colDate = isSqlite ? "date" : "`date`";
+    const entryId = `khe-s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const dateVal = reqDate ? toDbDateTimePK(reqDate) : toDbDateTimePK(new Date());
+    const noteVal = note != null ? String(note).trim() : "";
+
+    await query(
+      "INSERT INTO supplier_khata_entries (id, supplier_id, type, amount, note, date) VALUES (?, ?, ?, ?, ?, ?)",
+      [entryId, supplierId, type, amt, noteVal, dateVal]
+    );
+
+    const [row] = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at FROM supplier_khata_entries WHERE id = ?`,
+      [entryId]
+    );
+    const created = {
+      id: row.id,
+      type: row.type,
+      amount: parseFloat(row.amount),
+      note: row.note ?? null,
+      date: row.entry_date ? new Date(row.entry_date).toISOString() : (row.created_at ? new Date(row.created_at).toISOString() : null),
+    };
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("Khata supplier entry create error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -419,6 +798,128 @@ router.post("/cash-in", async (req, res) => {
     res.status(201).json(created);
   } catch (err) {
     console.error("Khata cash-in create error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /api/khata/cashin-statement – combined timeline for Cash in Khata (given out + received back + manual entries) */
+router.get("/cashin-statement", async (_req, res) => {
+  try {
+    const colDate = isSqlite ? "date" : "`date`";
+
+    const advancesRows = await query(
+      `SELECT id, amount, COALESCE(returned_amount, 0) AS returned_amount, category, description, ${colDate} AS entry_date
+       FROM expenses
+       WHERE category IN ('Urgent', 'Other') AND (COALESCE(returned_amount, 0) < amount)
+       ORDER BY entry_date DESC`
+    );
+    const cashInRows = await query(
+      `SELECT id, amount, note, ${colDate} AS entry_date FROM cash_in ORDER BY entry_date DESC, created_at DESC`
+    );
+    const manualRows = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at FROM cashin_khata_entries ORDER BY entry_date DESC, created_at DESC`
+    );
+
+    const outFromAdvances = (advancesRows || []).map((r) => {
+      const amount = parseFloat(r.amount);
+      const returned = parseFloat(r.returned_amount) || 0;
+      const balance = Math.max(0, amount - returned);
+      return {
+        id: r.id,
+        type: "out",
+        amount: balance,
+        note: r.description || r.category || "Given out",
+        date: r.entry_date ? new Date(r.entry_date).toISOString() : null,
+        source: "advance",
+      };
+    });
+    const inFromCashIn = (cashInRows || []).map((r) => ({
+      id: r.id,
+      type: "in",
+      amount: parseFloat(r.amount) || 0,
+      note: r.note ?? "Received back",
+      date: r.entry_date ? new Date(r.entry_date).toISOString() : null,
+      source: "cash_in",
+    }));
+    const manualEntries = (manualRows || []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      amount: parseFloat(r.amount) || 0,
+      note: r.note ?? null,
+      date: r.entry_date ? new Date(r.entry_date).toISOString() : (r.created_at ? new Date(r.created_at).toISOString() : null),
+      source: "manual",
+    }));
+
+    const allEntries = [...outFromAdvances, ...inFromCashIn, ...manualEntries].sort(
+      (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+    );
+
+    const totalOut =
+      outFromAdvances.reduce((s, e) => s + e.amount, 0) +
+      manualEntries.filter((e) => e.type === "out").reduce((s, e) => s + e.amount, 0);
+    const totalIn =
+      inFromCashIn.reduce((s, e) => s + e.amount, 0) +
+      manualEntries.filter((e) => e.type === "in").reduce((s, e) => s + e.amount, 0);
+
+    res.json({ totalOut, totalIn, entries: allEntries });
+  } catch (err) {
+    console.error("Khata cashin-statement error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/khata/cashin-entries – manual Cash in Khata entry (in | out) */
+router.post("/cashin-entries", async (req, res) => {
+  try {
+    const { type, amount, note, date: reqDate } = req.body;
+    if (!type || (type !== "in" && type !== "out")) {
+      return res.status(400).json({ error: "type must be 'in' or 'out'" });
+    }
+    const amt = parseFloat(amount);
+    if (amount == null || Number.isNaN(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const colDate = isSqlite ? "date" : "`date`";
+    const entryId = `khe-c-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const dateVal = reqDate ? toDbDateTimePK(reqDate) : toDbDateTimePK(new Date());
+    const noteVal = note != null ? String(note).trim() : "";
+
+    await query(
+      "INSERT INTO cashin_khata_entries (id, type, amount, note, date) VALUES (?, ?, ?, ?, ?)",
+      [entryId, type, amt, noteVal, dateVal]
+    );
+
+    const [row] = await query(
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, created_at FROM cashin_khata_entries WHERE id = ?`,
+      [entryId]
+    );
+    const created = {
+      id: row.id,
+      type: row.type,
+      amount: parseFloat(row.amount),
+      note: row.note ?? null,
+      date: row.entry_date ? new Date(row.entry_date).toISOString() : (row.created_at ? new Date(row.created_at).toISOString() : null),
+      source: "manual",
+    };
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("Khata cashin entry create error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** DELETE /api/khata/cashin-entries/:id – delete a manual Cash in Khata entry */
+router.delete("/cashin-entries/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query("DELETE FROM cashin_khata_entries WHERE id = ?", [id]);
+    const deleted = result?.affectedRows ?? 0;
+    if (deleted === 0) {
+      return res.status(404).json({ error: "Entry not found" });
+    }
+    res.status(204).send();
+  } catch (err) {
+    console.error("Khata cashin entry delete error:", err);
     res.status(500).json({ error: err.message });
   }
 });

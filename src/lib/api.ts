@@ -115,6 +115,14 @@ export const salesApi = {
 };
 
 export const khataApi = {
+  /** Total credit and debit. Optional from/to (YYYY-MM-DD) to filter by date range. */
+  getTotals: (params?: { from?: string; to?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    const q = sp.toString();
+    return fetchApi<{ totalCredit: number; totalDebit: number }>(`/khata/totals${q ? `?${q}` : ""}`);
+  },
   listCustomers: () => fetchApi<{ id: string; name: string; phone: string | null; balance: number }[]>("/khata/customers"),
   getLedger: () =>
     fetchApi<{
@@ -134,8 +142,15 @@ export const khataApi = {
       ledger: Array<
         | { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number; date: string | null; type: "sale" }
         | { id: string; saleId: string; amount: number; paymentMethod: string; date: string | null; type: "payment" }
+        | { id: string; type: "udhaar_added" | "payment_received"; amount: number; note: string | null; date: string | null }
       >;
     }>(`/khata/customers/${encodeURIComponent(customerId)}`),
+  /** Manual khata entry: udhaar_added (balance +) or payment_received (balance -). */
+  createCustomerKhataEntry: (customerId: string, data: { type: "udhaar_added" | "payment_received"; amount: number; note?: string; date?: string }) =>
+    fetchApi<{ id: string; type: string; amount: number; note: string | null; date: string | null }>(
+      `/khata/customers/${encodeURIComponent(customerId)}/entries`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
   listSuppliers: () =>
     fetchApi<{ id: string; name: string; phone: string | null; balance: number }[]>("/khata/suppliers"),
   /** All unpaid/partial purchases with supplier (for grouped table, like customer ledger) */
@@ -157,8 +172,15 @@ export const khataApi = {
       ledger: Array<
         | { id: string; total: number; paidAmount: number; paymentStatus: string; balance: number; date: string | null; type: "purchase" }
         | { id: string; purchaseId: string; amount: number; paymentMethod: string; date: string | null; type: "payment" }
+        | { id: string; type: "udhaar_added" | "payment_received"; amount: number; note: string | null; date: string | null }
       >;
     }>(`/khata/suppliers/${encodeURIComponent(supplierId)}`),
+  /** Manual supplier khata entry: udhaar_added (balance +) or payment_received (balance -). */
+  createSupplierKhataEntry: (supplierId: string, data: { type: "udhaar_added" | "payment_received"; amount: number; note?: string; date?: string }) =>
+    fetchApi<{ id: string; type: string; amount: number; note: string | null; date: string | null }>(
+      `/khata/suppliers/${encodeURIComponent(supplierId)}/entries`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
   /** Cash in / advances returned – money received back (out is in Expenses) */
   listCashIn: () =>
     fetchApi<{ id: string; amount: number; note: string; date: string; createdAt: string | null }[]>("/khata/cash-in"),
@@ -170,7 +192,59 @@ export const khataApi = {
   /** Expenses with category Urgent/Other with balance still to be returned (given out, show in Khata Cash in) */
   getAdvancesOut: () =>
     fetchApi<{ id: string; amount: number; returnedAmount: number; balance: number; category: string; description: string; date: string }[]>("/khata/advances-out"),
+  /** Cash in Khata statement: combined timeline (given out + received back + manual entries). */
+  getCashinStatement: () =>
+    fetchApi<{
+      totalOut: number;
+      totalIn: number;
+      entries: Array<{
+        id: string;
+        type: "in" | "out";
+        amount: number;
+        note: string | null;
+        date: string | null;
+        source: "advance" | "cash_in" | "manual";
+      }>;
+    }>("/khata/cashin-statement"),
+  /** Manual Cash in Khata entry. */
+  createCashinKhataEntry: (data: { type: "in" | "out"; amount: number; note?: string; date?: string }) =>
+    fetchApi<{ id: string; type: string; amount: number; note: string | null; date: string | null; source: string }>(
+      "/khata/cashin-entries",
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  deleteCashinKhataEntry: (id: string) =>
+    fetchApi(`/khata/cashin-entries/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** General in/out khata entries. Optional type (in|out), from, to. */
+  listKhataEntries: (params?: { type?: "in" | "out"; from?: string; to?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.type) sp.set("type", params.type);
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    const q = sp.toString();
+    return fetchApi<KhataEntry[]>(`/khata/entries${q ? `?${q}` : ""}`);
+  },
+  createKhataEntry: (data: {
+    type: "in" | "out";
+    amount: number;
+    note?: string;
+    date?: string;
+    linkType?: "random" | "customer" | "supplier" | "cashin";
+    linkId?: string;
+  }) =>
+    fetchApi<KhataEntry>("/khata/entries", { method: "POST", body: JSON.stringify(data) }),
+  deleteKhataEntry: (id: string) =>
+    fetchApi(`/khata/entries/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
+
+export interface KhataEntry {
+  id: string;
+  type: "in" | "out";
+  amount: number;
+  note: string | null;
+  date: string | null;
+  linkType: "random" | "customer" | "supplier" | "cashin";
+  linkId: string | null;
+}
 
 export const purchasesApi = {
   list: () => fetchApi("/purchases"),

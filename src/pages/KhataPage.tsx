@@ -18,8 +18,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wallet, Banknote, CreditCard, Search, X, Eye, Users, Truck, ArrowDownToLine, Plus } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Wallet, Banknote, CreditCard, Search, X, Eye, Users, Truck, ArrowDownToLine, Plus, ArrowDownLeft, ArrowUpRight, BookOpen, ArrowDownCircle, ArrowUpCircle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 type LedgerRow = {
@@ -99,6 +101,43 @@ const KhataPage = () => {
   const [returnNote, setReturnNote] = useState("");
   const [returnDate, setReturnDate] = useState("");
 
+  const [totalsFrom, setTotalsFrom] = useState("");
+  const [totalsTo, setTotalsTo] = useState("");
+
+  const [statementCustomerId, setStatementCustomerId] = useState<string | null>(null);
+  const [statementSupplierId, setStatementSupplierId] = useState<string | null>(null);
+  const [addKhataEntryOpen, setAddKhataEntryOpen] = useState(false);
+  const [supplierAddEntryOpen, setSupplierAddEntryOpen] = useState(false);
+  const [supplierEntryType, setSupplierEntryType] = useState<"udhaar_added" | "payment_received">("udhaar_added");
+  const [supplierEntryAmount, setSupplierEntryAmount] = useState("");
+  const [supplierEntryNote, setSupplierEntryNote] = useState("");
+  const [supplierEntryDate, setSupplierEntryDate] = useState("");
+  const [statementCashInOpen, setStatementCashInOpen] = useState(false);
+  const [cashinAddEntryOpen, setCashinAddEntryOpen] = useState(false);
+  const [cashinEntryType, setCashinEntryType] = useState<"in" | "out">("in");
+  const [cashinEntryAmount, setCashinEntryAmount] = useState("");
+  const [cashinEntryNote, setCashinEntryNote] = useState("");
+  const [cashinEntryDate, setCashinEntryDate] = useState("");
+  const [khataEntryType, setKhataEntryType] = useState<"udhaar_added" | "payment_received">("udhaar_added");
+  const [khataEntryAmount, setKhataEntryAmount] = useState("");
+  const [khataEntryNote, setKhataEntryNote] = useState("");
+  const [khataEntryDate, setKhataEntryDate] = useState("");
+
+  const [generalEntryOpen, setGeneralEntryOpen] = useState(false);
+  const [generalEntryType, setGeneralEntryType] = useState<"in" | "out">("in");
+  const [generalEntryAmount, setGeneralEntryAmount] = useState("");
+  const [generalEntryNote, setGeneralEntryNote] = useState("");
+  const [generalEntryDate, setGeneralEntryDate] = useState("");
+  const [generalEntryLinkType, setGeneralEntryLinkType] = useState<"random" | "customer" | "supplier" | "cashin">("random");
+  const [generalEntryLinkId, setGeneralEntryLinkId] = useState("");
+
+  const hasDateFilter = !!(totalsFrom && totalsTo);
+  const { data: totals, isLoading: totalsLoading } = useQuery({
+    queryKey: ["khata", "totals", totalsFrom || null, totalsTo || null],
+    queryFn: () =>
+      khataApi.getTotals(hasDateFilter ? { from: totalsFrom, to: totalsTo } : undefined),
+  });
+
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["khata", "ledger"],
     queryFn: () => khataApi.getLedger(),
@@ -120,6 +159,41 @@ const KhataPage = () => {
     queryKey: ["khata", "cash-in"],
     queryFn: () => khataApi.listCashIn(),
     enabled: activeTab === "cashin",
+  });
+
+  const { data: statementLedger, isLoading: statementLedgerLoading } = useQuery({
+    queryKey: ["khata", "customers", statementCustomerId],
+    queryFn: () => khataApi.getCustomerLedger(statementCustomerId!),
+    enabled: !!statementCustomerId,
+  });
+
+  const { data: statementSupplierLedger, isLoading: statementSupplierLedgerLoading } = useQuery({
+    queryKey: ["khata", "suppliers", statementSupplierId],
+    queryFn: () => khataApi.getSupplierLedger(statementSupplierId!),
+    enabled: !!statementSupplierId,
+  });
+
+  const { data: cashinStatement, isLoading: cashinStatementLoading } = useQuery({
+    queryKey: ["khata", "cashin-statement"],
+    queryFn: () => khataApi.getCashinStatement(),
+    enabled: statementCashInOpen,
+  });
+
+  const { data: khataEntriesList = [], isLoading: khataEntriesLoading } = useQuery({
+    queryKey: ["khata", "entries"],
+    queryFn: () => khataApi.listKhataEntries(),
+  });
+
+  const { data: khataCustomers = [] } = useQuery({
+    queryKey: ["khata", "customers-list"],
+    queryFn: () => khataApi.listCustomers(),
+    enabled: generalEntryOpen && generalEntryLinkType === "customer",
+  });
+
+  const { data: khataSuppliers = [] } = useQuery({
+    queryKey: ["khata", "suppliers-list"],
+    queryFn: () => khataApi.listSuppliers(),
+    enabled: generalEntryOpen && generalEntryLinkType === "supplier",
   });
 
   const { data: advancesOut = [], isLoading: advancesOutLoading } = useQuery({
@@ -305,6 +379,96 @@ const KhataPage = () => {
     onError: (err: Error) => toast.error(err.message || "Failed to record cash in"),
   });
 
+  const createKhataEntryMutation = useMutation({
+    mutationFn: (data: { type: "udhaar_added" | "payment_received"; amount: number; note?: string; date?: string }) =>
+      khataApi.createCustomerKhataEntry(statementCustomerId!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata"] });
+      if (statementCustomerId) {
+        queryClient.invalidateQueries({ queryKey: ["khata", "customers", statementCustomerId] });
+      }
+      setAddKhataEntryOpen(false);
+      setKhataEntryAmount("");
+      setKhataEntryNote("");
+      setKhataEntryDate("");
+      toast.success("Khata entry saved");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to save entry"),
+  });
+
+  const createGeneralKhataEntryMutation = useMutation({
+    mutationFn: (data: {
+      type: "in" | "out";
+      amount: number;
+      note?: string;
+      date?: string;
+      linkType?: "random" | "customer" | "supplier" | "cashin";
+      linkId?: string;
+    }) => khataApi.createKhataEntry(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata", "entries"] });
+      setGeneralEntryOpen(false);
+      setGeneralEntryAmount("");
+      setGeneralEntryNote("");
+      setGeneralEntryDate("");
+      setGeneralEntryLinkType("random");
+      setGeneralEntryLinkId("");
+      toast.success("Entry saved");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to save entry"),
+  });
+
+  const deleteKhataEntryMutation = useMutation({
+    mutationFn: (id: string) => khataApi.deleteKhataEntry(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata", "entries"] });
+      toast.success("Entry removed");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to remove entry"),
+  });
+
+  const createSupplierKhataEntryMutation = useMutation({
+    mutationFn: (data: { type: "udhaar_added" | "payment_received"; amount: number; note?: string; date?: string }) =>
+      khataApi.createSupplierKhataEntry(statementSupplierId!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata"] });
+      if (statementSupplierId) {
+        queryClient.invalidateQueries({ queryKey: ["khata", "suppliers", statementSupplierId] });
+      }
+      setSupplierAddEntryOpen(false);
+      setSupplierEntryAmount("");
+      setSupplierEntryNote("");
+      setSupplierEntryDate("");
+      toast.success("Khata entry saved");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to save entry"),
+  });
+
+  const createCashinKhataEntryMutation = useMutation({
+    mutationFn: (data: { type: "in" | "out"; amount: number; note?: string; date?: string }) =>
+      khataApi.createCashinKhataEntry(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata", "cashin-statement"] });
+      queryClient.invalidateQueries({ queryKey: ["khata", "cash-in"] });
+      queryClient.invalidateQueries({ queryKey: ["khata", "advances-out"] });
+      setCashinAddEntryOpen(false);
+      setCashinEntryAmount("");
+      setCashinEntryNote("");
+      setCashinEntryDate("");
+      toast.success("Entry saved");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to save entry"),
+  });
+
+  const deleteCashinKhataEntryMutation = useMutation({
+    mutationFn: (id: string) => khataApi.deleteCashinKhataEntry(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["khata", "cashin-statement"] });
+      toast.success("Entry removed");
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to remove entry"),
+  });
+
   const handleRecordReturn = (isFull: boolean) => {
     if (!recordReturnFor) return;
     const amount = isFull ? recordReturnFor.balance : parseFloat(returnAmount) || 0;
@@ -344,6 +508,8 @@ const KhataPage = () => {
     });
   };
 
+  const totalsMaxDate = new Date().toLocaleDateString("en-CA");
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -357,6 +523,257 @@ const KhataPage = () => {
           </div>
         </div>
       </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor="totals-from" className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
+          <Input
+            id="totals-from"
+            type="date"
+            value={totalsFrom}
+            onChange={(e) => setTotalsFrom(e.target.value)}
+            max={totalsMaxDate}
+            className="h-9 min-w-[150px] w-40"
+          />
+          <Label htmlFor="totals-to" className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
+          <Input
+            id="totals-to"
+            type="date"
+            value={totalsTo}
+            onChange={(e) => setTotalsTo(e.target.value)}
+            max={totalsMaxDate}
+            className="h-9 min-w-[150px] w-40"
+          />
+          {(totalsFrom || totalsTo) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-9 text-xs"
+              onClick={() => { setTotalsFrom(""); setTotalsTo(""); }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 max-w-md">
+        <div
+          className="rounded-lg border border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30 px-4 py-3 flex items-center gap-3"
+          aria-label="Total debit"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
+            <ArrowDownLeft className="h-4 w-4 text-red-600 dark:text-red-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-red-800 dark:text-red-200">Debit</p>
+            <p className="text-lg font-bold tabular-nums text-red-700 dark:text-red-300">
+              {totalsLoading ? "…" : `$${(totals?.totalDebit ?? 0).toFixed(2)}`}
+            </p>
+          </div>
+        </div>
+        <div
+          className="rounded-lg border border-green-200 bg-green-50 dark:border-green-900/50 dark:bg-green-950/30 px-4 py-3 flex items-center gap-3"
+          aria-label="Total credit"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/50">
+            <ArrowUpRight className="h-4 w-4 text-green-600 dark:text-green-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-green-800 dark:text-green-200">Credit</p>
+            <p className="text-lg font-bold tabular-nums text-green-700 dark:text-green-300">
+              {totalsLoading ? "…" : `$${(totals?.totalCredit ?? 0).toFixed(2)}`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="default"
+          size="sm"
+          className="bg-green-600 hover:bg-green-700"
+          onClick={() => {
+            setGeneralEntryType("in");
+            setGeneralEntryAmount("");
+            setGeneralEntryNote("");
+            setGeneralEntryDate("");
+            setGeneralEntryLinkType("random");
+            setGeneralEntryLinkId("");
+            setGeneralEntryOpen(true);
+          }}
+        >
+          <ArrowUpRight className="h-4 w-4 mr-1" /> Add In Khata
+        </Button>
+        <Button
+          variant="default"
+          size="sm"
+          className="bg-red-600 hover:bg-red-700"
+          onClick={() => {
+            setGeneralEntryType("out");
+            setGeneralEntryAmount("");
+            setGeneralEntryNote("");
+            setGeneralEntryDate("");
+            setGeneralEntryLinkType("random");
+            setGeneralEntryLinkId("");
+            setGeneralEntryOpen(true);
+          }}
+        >
+          <ArrowDownLeft className="h-4 w-4 mr-1" /> Add Out Khata
+        </Button>
+      </div>
+
+      <div className="space-y-3">
+        <h2 className="font-heading text-sm font-semibold text-muted-foreground">Khata entries</h2>
+        {khataEntriesLoading ? (
+          <p className="text-sm text-muted-foreground py-4">Loading…</p>
+        ) : khataEntriesList.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4">No entries yet. Use Add In Khata or Add Out Khata above.</p>
+        ) : (
+          <div className="space-y-2 max-h-[240px] overflow-y-auto">
+            {khataEntriesList.map((e) => (
+              <div
+                key={e.id}
+                className={`rounded-lg border p-3 flex items-center justify-between gap-3 ${
+                  e.type === "in"
+                    ? "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
+                    : "border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-950/20"
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-sm capitalize">{e.type === "in" ? "In" : "Out"}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {e.date ? new Date(e.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">{e.note || (e.linkType !== "random" ? e.linkType : "—")}</p>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  <span className={`font-semibold tabular-nums ${e.type === "in" ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300"}`}>
+                    {e.type === "in" ? "+" : "-"}${e.amount.toFixed(2)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteKhataEntryMutation.mutate(e.id)}
+                    disabled={deleteKhataEntryMutation.isPending}
+                    aria-label="Remove entry"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Dialog open={generalEntryOpen} onOpenChange={setGeneralEntryOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{generalEntryType === "in" ? "Add In Khata" : "Add Out Khata"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Link to (optional)</Label>
+              <Select value={generalEntryLinkType} onValueChange={(v) => { setGeneralEntryLinkType(v as "random" | "customer" | "supplier" | "cashin"); setGeneralEntryLinkId(""); }}>
+                <SelectTrigger className="mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="random">Random entry</SelectItem>
+                  <SelectItem value="customer">Customer</SelectItem>
+                  <SelectItem value="supplier">Supplier</SelectItem>
+                  <SelectItem value="cashin">Cash in</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {generalEntryLinkType === "customer" && (
+              <div>
+                <Label>Customer</Label>
+                <Select value={generalEntryLinkId} onValueChange={setGeneralEntryLinkId}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {khataCustomers.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {generalEntryLinkType === "supplier" && (
+              <div>
+                <Label>Supplier</Label>
+                <Select value={generalEntryLinkId} onValueChange={setGeneralEntryLinkId}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select supplier" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {khataSuppliers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div>
+              <Label htmlFor="gen-entry-amount">Amount *</Label>
+              <Input
+                id="gen-entry-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={generalEntryAmount}
+                onChange={(e) => setGeneralEntryAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <Label htmlFor="gen-entry-note">Note / description</Label>
+              <Input
+                id="gen-entry-note"
+                value={generalEntryNote}
+                onChange={(e) => setGeneralEntryNote(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+            <div>
+              <Label htmlFor="gen-entry-date">Date</Label>
+              <Input
+                id="gen-entry-date"
+                type="date"
+                value={generalEntryDate}
+                onChange={(e) => setGeneralEntryDate(e.target.value)}
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={
+                createGeneralKhataEntryMutation.isPending ||
+                !generalEntryAmount ||
+                parseFloat(generalEntryAmount) <= 0
+              }
+              onClick={() => {
+                const amount = parseFloat(generalEntryAmount);
+                if (Number.isNaN(amount) || amount <= 0) return;
+                createGeneralKhataEntryMutation.mutate({
+                  type: generalEntryType,
+                  amount,
+                  note: generalEntryNote.trim() || undefined,
+                  date: generalEntryDate.trim() || undefined,
+                  linkType: generalEntryLinkType,
+                  linkId: generalEntryLinkId.trim() || undefined,
+                });
+              }}
+            >
+              {createGeneralKhataEntryMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "customers" | "suppliers" | "cashin")}>
         <TabsList className="grid w-full max-w-md grid-cols-3">
@@ -475,7 +892,17 @@ const KhataPage = () => {
                     <TableCell className="text-right">${cust.totalPaid.toFixed(2)}</TableCell>
                     <TableCell className="text-right font-semibold">${cust.totalDue.toFixed(2)}</TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
+                      <div className="flex justify-end gap-1 flex-wrap">
+                        {(cust.sales[0]?.customerId) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            title="Open Khata statement"
+                            onClick={() => setStatementCustomerId(cust.sales[0].customerId)}
+                          >
+                            <BookOpen className="h-4 w-4 mr-1" /> Khata
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -576,7 +1003,15 @@ const KhataPage = () => {
                         <TableCell className="text-right">${sup.totalPaid.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-semibold">${sup.totalDue.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
+                          <div className="flex justify-end gap-1 flex-wrap">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              title="Open Khata statement"
+                              onClick={() => setStatementSupplierId(sup.supplierId)}
+                            >
+                              <BookOpen className="h-4 w-4 mr-1" /> Khata
+                            </Button>
                             <Button
                               variant="ghost"
                               size="icon"
@@ -730,13 +1165,18 @@ const KhataPage = () => {
         </TabsContent>
 
         <TabsContent value="cashin" className="space-y-6 mt-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm text-muted-foreground">
               Expenses with category <strong>Urgent</strong> or <strong>Other</strong> appear below as given out. Record returns here.
             </p>
-            <Button onClick={() => { setCashInDialogOpen(true); setCashInDate(""); setCashInAmount(""); setCashInNote(""); }}>
-              <Plus className="mr-1 h-4 w-4" /> Add cash in
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setStatementCashInOpen(true)}>
+                Khata
+              </Button>
+              <Button onClick={() => { setCashInDialogOpen(true); setCashInDate(""); setCashInAmount(""); setCashInNote(""); }}>
+                <Plus className="mr-1 h-4 w-4" /> Add cash in
+              </Button>
+            </div>
           </div>
 
           {advancesOutLoading ? (
@@ -959,6 +1399,621 @@ const KhataPage = () => {
           </Dialog>
         </TabsContent>
       </Tabs>
+
+      {/* Customer Khata Timeline (Digi Khata style) */}
+      <Sheet open={!!statementCustomerId} onOpenChange={(open) => !open && setStatementCustomerId(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto flex flex-col p-0">
+          <SheetHeader className="p-4 border-b shrink-0">
+            <SheetTitle>Customer Khata</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {statementLedgerLoading ? (
+              <p className="text-sm text-muted-foreground py-8">Loading…</p>
+            ) : statementLedger ? (
+              <>
+                <div className="space-y-1">
+                  <h2 className="font-heading text-xl font-semibold">{statementLedger.customer.name}</h2>
+                  {statementLedger.customer.phone && (
+                    <p className="text-sm text-muted-foreground">{statementLedger.customer.phone}</p>
+                  )}
+                </div>
+                <div className="rounded-xl bg-primary/10 border-2 border-primary/30 p-4 text-center">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Current balance</p>
+                  <p className="font-heading text-3xl font-bold text-foreground mt-1">
+                    ${statementLedger.balance.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Amount customer owes you</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-heading text-sm font-semibold text-muted-foreground">Transaction timeline</h3>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setKhataEntryType("udhaar_added");
+                        setKhataEntryAmount("");
+                        setKhataEntryNote("");
+                        setKhataEntryDate("");
+                        setAddKhataEntryOpen(true);
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Add Khata Entry
+                    </Button>
+                  </div>
+                  {statementLedger.ledger.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-6 text-center">No entries yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {statementLedger.ledger.map((entry) => {
+                        const isOwe = entry.type === "sale" || entry.type === "udhaar_added";
+                        const isPayment = entry.type === "payment" || entry.type === "payment_received";
+                        const label =
+                          entry.type === "sale"
+                            ? "Udhaar added"
+                            : entry.type === "payment"
+                              ? "Payment received"
+                              : entry.type === "udhaar_added"
+                                ? "Udhaar added"
+                                : "Payment received";
+                        const amount =
+                          "balance" in entry && entry.type === "sale"
+                            ? (entry as { balance: number }).balance
+                            : "amount" in entry
+                              ? (entry as { amount: number }).amount
+                              : 0;
+                        const note =
+                          "note" in entry && (entry as { note?: string }).note
+                            ? (entry as { note: string }).note
+                            : entry.type === "payment"
+                              ? `Payment (${(entry as { paymentMethod?: string }).paymentMethod || "cash"})`
+                              : null;
+                        const dateStr = entry.date
+                          ? new Date(entry.date).toLocaleString(undefined, {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })
+                          : "—";
+                        return (
+                          <div
+                            key={entry.id}
+                            className={`rounded-lg border p-3 ${
+                              isOwe
+                                ? "border-amber-200 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20"
+                                : "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-sm">{label}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">{dateStr}</p>
+                                {note && (
+                                  <p className="text-xs text-muted-foreground mt-1 truncate" title={note}>
+                                    {note}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1">
+                                {isOwe ? (
+                                  <ArrowDownCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                ) : (
+                                  <ArrowUpCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                )}
+                                <span
+                                  className={`font-semibold tabular-nums ${
+                                    isOwe
+                                      ? "text-amber-700 dark:text-amber-300"
+                                      : "text-green-700 dark:text-green-300"
+                                  }`}
+                                >
+                                  {isOwe ? "+" : "-"}${amount.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Supplier Khata Timeline (same as Customer) */}
+      <Sheet open={!!statementSupplierId} onOpenChange={(open) => !open && setStatementSupplierId(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto flex flex-col p-0">
+          <SheetHeader className="p-4 border-b shrink-0">
+            <SheetTitle>Supplier Khata</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {statementSupplierLedgerLoading ? (
+              <p className="text-sm text-muted-foreground py-8">Loading…</p>
+            ) : statementSupplierLedger ? (
+              <>
+                <div className="space-y-1">
+                  <h2 className="font-heading text-xl font-semibold">{statementSupplierLedger.supplier.name}</h2>
+                  {statementSupplierLedger.supplier.phone && (
+                    <p className="text-sm text-muted-foreground">{statementSupplierLedger.supplier.phone}</p>
+                  )}
+                </div>
+                <div className="rounded-xl bg-primary/10 border-2 border-primary/30 p-4 text-center">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Current balance</p>
+                  <p className="font-heading text-3xl font-bold text-foreground mt-1">
+                    ${statementSupplierLedger.balance.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Amount you owe to supplier</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-heading text-sm font-semibold text-muted-foreground">Transaction timeline</h3>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setSupplierEntryType("udhaar_added");
+                        setSupplierEntryAmount("");
+                        setSupplierEntryNote("");
+                        setSupplierEntryDate("");
+                        setSupplierAddEntryOpen(true);
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Add Khata Entry
+                    </Button>
+                  </div>
+                  {statementSupplierLedger.ledger.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-6 text-center">No entries yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {statementSupplierLedger.ledger.map((entry) => {
+                        const isOwe = entry.type === "purchase" || entry.type === "udhaar_added";
+                        const isPayment = entry.type === "payment" || entry.type === "payment_received";
+                        const label =
+                          entry.type === "purchase"
+                            ? "Udhaar added"
+                            : entry.type === "payment"
+                              ? "Payment made"
+                              : entry.type === "udhaar_added"
+                                ? "Udhaar added"
+                                : "Payment made";
+                        const amount =
+                          "balance" in entry && entry.type === "purchase"
+                            ? (entry as { balance: number }).balance
+                            : "amount" in entry
+                              ? (entry as { amount: number }).amount
+                              : 0;
+                        const note =
+                          "note" in entry && (entry as { note?: string }).note
+                            ? (entry as { note: string }).note
+                            : entry.type === "payment"
+                              ? `Payment (${(entry as { paymentMethod?: string }).paymentMethod || "cash"})`
+                              : null;
+                        const dateStr = entry.date
+                          ? new Date(entry.date).toLocaleString(undefined, {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })
+                          : "—";
+                        return (
+                          <div
+                            key={entry.id}
+                            className={`rounded-lg border p-3 ${
+                              isOwe
+                                ? "border-amber-200 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20"
+                                : "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-sm">{label}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">{dateStr}</p>
+                                {note && (
+                                  <p className="text-xs text-muted-foreground mt-1 truncate" title={note}>
+                                    {note}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1">
+                                {isOwe ? (
+                                  <ArrowDownCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                ) : (
+                                  <ArrowUpCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                )}
+                                <span
+                                  className={`font-semibold tabular-nums ${
+                                    isOwe
+                                      ? "text-amber-700 dark:text-amber-300"
+                                      : "text-green-700 dark:text-green-300"
+                                  }`}
+                                >
+                                  {isOwe ? "+" : "-"}${amount.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Cash in Khata statement sheet */}
+      <Sheet open={statementCashInOpen} onOpenChange={setStatementCashInOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto flex flex-col p-0">
+          <SheetHeader className="p-4 border-b shrink-0">
+            <SheetTitle>Cash in Khata</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {cashinStatementLoading ? (
+              <p className="text-sm text-muted-foreground py-8">Loading…</p>
+            ) : cashinStatement ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border-2 border-amber-200 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20 p-3 text-center">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Given out</p>
+                    <p className="font-heading text-xl font-bold text-amber-700 dark:text-amber-300">
+                      ${cashinStatement.totalOut.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border-2 border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20 p-3 text-center">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Received back</p>
+                    <p className="font-heading text-xl font-bold text-green-700 dark:text-green-300">
+                      ${cashinStatement.totalIn.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-heading text-sm font-semibold text-muted-foreground">Timeline</h3>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setCashinEntryType("in");
+                        setCashinEntryAmount("");
+                        setCashinEntryNote("");
+                        setCashinEntryDate("");
+                        setCashinAddEntryOpen(true);
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Add Khata Entry
+                    </Button>
+                  </div>
+                  {!cashinStatement.entries?.length ? (
+                    <p className="text-sm text-muted-foreground py-6 text-center">No entries yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {cashinStatement.entries.map((entry) => {
+                        const isOut = entry.type === "out";
+                        const label = isOut ? "Given out" : "Received";
+                        const sourceLabel =
+                          entry.source === "advance"
+                            ? "Advance"
+                            : entry.source === "cash_in"
+                              ? "Cash in"
+                              : "Manual";
+                        const dateStr = entry.date
+                          ? new Date(entry.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                          : "—";
+                        return (
+                          <div
+                            key={entry.id}
+                            className={`rounded-lg border p-3 ${
+                              isOut
+                                ? "border-amber-200 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20"
+                                : "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-sm">{label}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">{dateStr}</p>
+                                {entry.note && (
+                                  <p className="text-xs text-muted-foreground mt-1 truncate" title={entry.note}>
+                                    {entry.note}
+                                  </p>
+                                )}
+                                <p className="text-xs text-muted-foreground mt-0.5">{sourceLabel}</p>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1">
+                                {isOut ? (
+                                  <ArrowDownCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                                ) : (
+                                  <ArrowUpCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                )}
+                                <span
+                                  className={`font-semibold tabular-nums ${
+                                    isOut
+                                      ? "text-amber-700 dark:text-amber-300"
+                                      : "text-green-700 dark:text-green-300"
+                                  }`}
+                                >
+                                  {isOut ? "-" : "+"}${entry.amount.toFixed(2)}
+                                </span>
+                                {entry.source === "manual" && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                    onClick={() => {
+                                      if (confirm("Remove this entry?")) {
+                                        deleteCashinKhataEntryMutation.mutate(entry.id);
+                                      }
+                                    }}
+                                    disabled={deleteCashinKhataEntryMutation.isPending}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Add Khata Entry modal (customer) */}
+      <Dialog open={addKhataEntryOpen} onOpenChange={setAddKhataEntryOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Khata Entry</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Entry type</Label>
+              <div className="flex gap-2 mt-2">
+                <Button
+                  type="button"
+                  variant={khataEntryType === "udhaar_added" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setKhataEntryType("udhaar_added")}
+                >
+                  Udhaar added
+                </Button>
+                <Button
+                  type="button"
+                  variant={khataEntryType === "payment_received" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setKhataEntryType("payment_received")}
+                >
+                  Payment received
+                </Button>
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="khata-entry-amount">Amount *</Label>
+              <Input
+                id="khata-entry-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={khataEntryAmount}
+                onChange={(e) => setKhataEntryAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <Label htmlFor="khata-entry-note">Note / description</Label>
+              <Input
+                id="khata-entry-note"
+                value={khataEntryNote}
+                onChange={(e) => setKhataEntryNote(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+            <div>
+              <Label htmlFor="khata-entry-date">Date</Label>
+              <Input
+                id="khata-entry-date"
+                type="date"
+                value={khataEntryDate}
+                onChange={(e) => setKhataEntryDate(e.target.value)}
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={
+                createKhataEntryMutation.isPending ||
+                !khataEntryAmount ||
+                parseFloat(khataEntryAmount) <= 0
+              }
+              onClick={() => {
+                const amount = parseFloat(khataEntryAmount);
+                if (Number.isNaN(amount) || amount <= 0) return;
+                createKhataEntryMutation.mutate({
+                  type: khataEntryType,
+                  amount,
+                  note: khataEntryNote.trim() || undefined,
+                  date: khataEntryDate.trim() || undefined,
+                });
+              }}
+            >
+              {createKhataEntryMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Khata Entry modal (supplier) */}
+      <Dialog open={supplierAddEntryOpen} onOpenChange={setSupplierAddEntryOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Khata Entry — Supplier</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Entry type</Label>
+              <div className="flex gap-2 mt-2">
+                <Button
+                  type="button"
+                  variant={supplierEntryType === "udhaar_added" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setSupplierEntryType("udhaar_added")}
+                >
+                  Udhaar added
+                </Button>
+                <Button
+                  type="button"
+                  variant={supplierEntryType === "payment_received" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setSupplierEntryType("payment_received")}
+                >
+                  Payment made
+                </Button>
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="supplier-khata-amount">Amount *</Label>
+              <Input
+                id="supplier-khata-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={supplierEntryAmount}
+                onChange={(e) => setSupplierEntryAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <Label htmlFor="supplier-khata-note">Note / description</Label>
+              <Input
+                id="supplier-khata-note"
+                value={supplierEntryNote}
+                onChange={(e) => setSupplierEntryNote(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+            <div>
+              <Label htmlFor="supplier-khata-date">Date</Label>
+              <Input
+                id="supplier-khata-date"
+                type="date"
+                value={supplierEntryDate}
+                onChange={(e) => setSupplierEntryDate(e.target.value)}
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={
+                createSupplierKhataEntryMutation.isPending ||
+                !supplierEntryAmount ||
+                parseFloat(supplierEntryAmount) <= 0
+              }
+              onClick={() => {
+                const amount = parseFloat(supplierEntryAmount);
+                if (Number.isNaN(amount) || amount <= 0) return;
+                createSupplierKhataEntryMutation.mutate({
+                  type: supplierEntryType,
+                  amount,
+                  note: supplierEntryNote.trim() || undefined,
+                  date: supplierEntryDate.trim() || undefined,
+                });
+              }}
+            >
+              {createSupplierKhataEntryMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Khata Entry modal (Cash in) */}
+      <Dialog open={cashinAddEntryOpen} onOpenChange={setCashinAddEntryOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Khata Entry — Cash in</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Entry type</Label>
+              <div className="flex gap-2 mt-2">
+                <Button
+                  type="button"
+                  variant={cashinEntryType === "in" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setCashinEntryType("in")}
+                >
+                  In (received)
+                </Button>
+                <Button
+                  type="button"
+                  variant={cashinEntryType === "out" ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => setCashinEntryType("out")}
+                >
+                  Out (given)
+                </Button>
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="cashin-khata-amount">Amount *</Label>
+              <Input
+                id="cashin-khata-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={cashinEntryAmount}
+                onChange={(e) => setCashinEntryAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <Label htmlFor="cashin-khata-note">Note / description</Label>
+              <Input
+                id="cashin-khata-note"
+                value={cashinEntryNote}
+                onChange={(e) => setCashinEntryNote(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+            <div>
+              <Label htmlFor="cashin-khata-date">Date</Label>
+              <Input
+                id="cashin-khata-date"
+                type="date"
+                value={cashinEntryDate}
+                onChange={(e) => setCashinEntryDate(e.target.value)}
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={
+                createCashinKhataEntryMutation.isPending ||
+                !cashinEntryAmount ||
+                parseFloat(cashinEntryAmount) <= 0
+              }
+              onClick={() => {
+                const amount = parseFloat(cashinEntryAmount);
+                if (Number.isNaN(amount) || amount <= 0) return;
+                createCashinKhataEntryMutation.mutate({
+                  type: cashinEntryType,
+                  amount,
+                  note: cashinEntryNote.trim() || undefined,
+                  date: cashinEntryDate.trim() || undefined,
+                });
+              }}
+            >
+              {createCashinKhataEntryMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Record payment modal (customer) */}
       {recordingPaymentFor && (
