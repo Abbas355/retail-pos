@@ -71,6 +71,9 @@ const SettingsPage = () => {
         ) || DEFAULT_SETTINGS.defaultLowStockThreshold,
       receiptHeader: (form.receiptHeader ?? "").trim(),
       receiptFooter: (form.receiptFooter ?? "").trim(),
+      receiptWidthChars: [32, 48].includes(Number(form.receiptWidthChars))
+        ? Number(form.receiptWidthChars)
+        : DEFAULT_SETTINGS.receiptWidthChars,
       autoSync: form.autoSync ?? true,
     };
     setSaved(next);
@@ -209,6 +212,19 @@ const SettingsPage = () => {
               onChange={(e) => update({ receiptFooter: e.target.value })}
               placeholder={t("settings.receiptFooterPlaceholder")}
             />
+          </div>
+          <div className="grid gap-2 max-w-md">
+            <Label htmlFor="receiptWidthChars">{t("settings.receiptWidthChars")}</Label>
+            <select
+              id="receiptWidthChars"
+              value={form.receiptWidthChars ?? DEFAULT_SETTINGS.receiptWidthChars}
+              onChange={(e) => update({ receiptWidthChars: Number(e.target.value) })}
+              className="flex h-9 w-full max-w-[280px] rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value={32}>{t("settings.receiptWidth58")}</option>
+              <option value={48}>{t("settings.receiptWidth80")}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">{t("settings.receiptWidthHint")}</p>
           </div>
         </CardContent>
       </Card>

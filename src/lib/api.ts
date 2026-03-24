@@ -308,7 +308,7 @@ export const syncApi = {
 };
 
 export const printApi = {
-  receipt: (data: { sale: import("@/types/pos").Sale; settings: { storeName: string; currencySymbol: string; receiptHeader?: string; receiptFooter?: string }; locale?: string }) =>
+  receipt: (data: { sale: import("@/types/pos").Sale; settings: { storeName: string; currencySymbol: string; receiptHeader?: string; receiptFooter?: string; receiptWidthChars?: number }; locale?: string }) =>
     fetchApi<{ ok: boolean }>("/print/receipt", { method: "POST", body: JSON.stringify(data) }),
 };
 

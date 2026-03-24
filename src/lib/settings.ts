@@ -11,6 +11,8 @@ export interface AppSettings {
   defaultLowStockThreshold: number;
   receiptHeader: string;
   receiptFooter: string;
+  /** Chars per line for thermal print (32 ≈ 58mm, 48 ≈ 80mm). */
+  receiptWidthChars: number;
   autoSync: boolean;
 }
 
@@ -20,6 +22,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultLowStockThreshold: 5,
   receiptHeader: "",
   receiptFooter: "Thanks for your purchase!",
+  receiptWidthChars: 48,
   autoSync: true,
 };
 
