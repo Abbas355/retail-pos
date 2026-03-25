@@ -3,6 +3,7 @@ import { query } from "../config/database.js";
 import { logActivityDelete, inferDeleteSource } from "../lib/activityLog.js";
 
 const router = Router();
+const isSqlite = (process.env.DB_TYPE || "mysql").toLowerCase() === "sqlite";
 
 function toProduct(row) {
   return {
@@ -52,6 +53,107 @@ router.get("/by-barcode/:barcode", async (req, res) => {
   } catch (err) {
     console.error("Product by-barcode error:", err);
     res.status(500).json({ error: "Failed to lookup product" });
+  }
+});
+
+/** GET /api/products/stock-report/in?from=YYYY-MM-DD&to=YYYY-MM-DD – purchase lines (stock received). */
+router.get("/stock-report/in", async (req, res) => {
+  try {
+    const from = req.query.from ? String(req.query.from).slice(0, 10) : null;
+    const to = req.query.to ? String(req.query.to).slice(0, 10) : null;
+    const dateCol = isSqlite ? "date(p.created_at)" : "DATE(p.created_at)";
+    const conds = [];
+    const params = [];
+    if (from) {
+      conds.push(`${dateCol} >= ?`);
+      params.push(from);
+    }
+    if (to) {
+      conds.push(`${dateCol} <= ?`);
+      params.push(to);
+    }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sql = `
+      SELECT pi.id AS line_id, pi.product_id, pi.product_name, pi.quantity, pi.cost,
+        p.id AS purchase_id, p.created_at AS occurred_at, sup.name AS supplier_name
+      FROM purchase_items pi
+      INNER JOIN purchases p ON p.id = pi.purchase_id
+      LEFT JOIN suppliers sup ON sup.id = p.supplier_id
+      ${where}
+      ORDER BY p.created_at DESC, pi.id DESC
+      LIMIT 2000`;
+    const rows = await query(sql, params);
+    const lines = rows.map((r) => {
+      const qty = Number(r.quantity) || 0;
+      const cost = parseFloat(r.cost) || 0;
+      return {
+        id: String(r.line_id),
+        purchaseId: r.purchase_id,
+        date: r.occurred_at ? new Date(r.occurred_at).toISOString() : null,
+        productId: r.product_id,
+        productName: r.product_name || "",
+        quantity: qty,
+        unitCost: cost,
+        lineValue: Math.round(qty * cost * 100) / 100,
+        supplierName: r.supplier_name || null,
+      };
+    });
+    const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
+    const totalValue = Math.round(lines.reduce((s, l) => s + l.lineValue, 0) * 100) / 100;
+    res.json({ lines, summary: { totalQty, totalValue, movement: "in" } });
+  } catch (err) {
+    console.error("Stock report IN error:", err);
+    res.status(500).json({ error: "Failed to fetch stock in report" });
+  }
+});
+
+/** GET /api/products/stock-report/out?from=&to= – sale lines (stock sold). */
+router.get("/stock-report/out", async (req, res) => {
+  try {
+    const from = req.query.from ? String(req.query.from).slice(0, 10) : null;
+    const to = req.query.to ? String(req.query.to).slice(0, 10) : null;
+    const dateCol = isSqlite ? "date(s.created_at)" : "DATE(s.created_at)";
+    const conds = [];
+    const params = [];
+    if (from) {
+      conds.push(`${dateCol} >= ?`);
+      params.push(from);
+    }
+    if (to) {
+      conds.push(`${dateCol} <= ?`);
+      params.push(to);
+    }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sql = `
+      SELECT si.id AS line_id, si.product_id, si.product_name, si.quantity, si.unit_price,
+        s.id AS sale_id, s.created_at AS occurred_at, s.payment_method
+      FROM sale_items si
+      INNER JOIN sales s ON s.id = si.sale_id
+      ${where}
+      ORDER BY s.created_at DESC, si.id DESC
+      LIMIT 2000`;
+    const rows = await query(sql, params);
+    const lines = rows.map((r) => {
+      const qty = Number(r.quantity) || 0;
+      const price = parseFloat(r.unit_price) || 0;
+      return {
+        id: String(r.line_id),
+        saleId: r.sale_id,
+        date: r.occurred_at ? new Date(r.occurred_at).toISOString() : null,
+        productId: r.product_id,
+        productName: r.product_name || "",
+        quantity: qty,
+        unitPrice: price,
+        lineValue: Math.round(qty * price * 100) / 100,
+        paymentMethod: (r.payment_method || "cash").toLowerCase(),
+      };
+    });
+    const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
+    const totalValue = Math.round(lines.reduce((s, l) => s + l.lineValue, 0) * 100) / 100;
+    res.json({ lines, summary: { totalQty, totalValue, movement: "out" } });
+  } catch (err) {
+    console.error("Stock report OUT error:", err);
+    res.status(500).json({ error: "Failed to fetch stock out report" });
   }
 });
 

@@ -310,6 +310,35 @@ function ensureActivityLogTable() {
 }
 ensureActivityLogTable();
 
+/** Bills (Bill Book in Khata app). */
+function ensureBillsTables() {
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS bills (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      total REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      notes TEXT NULL,
+      bill_date TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS bill_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 1,
+      unit_price REAL NOT NULL,
+      FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_bills_created_at ON bills(created_at)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureBillsTables();
+
 // Optional: make SQL slightly MySQL-friendly (e.g. NOW() in routes)
 function normalizeSql(sql) {
   return sql.replace(/\bNOW\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");

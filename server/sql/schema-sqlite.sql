@@ -109,3 +109,24 @@ CREATE TABLE IF NOT EXISTS expenses (
   created_at TEXT DEFAULT (datetime('now')),
   created_by TEXT
 );
+
+CREATE TABLE IF NOT EXISTS bills (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NULL,
+  customer_name TEXT NOT NULL DEFAULT '',
+  total REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  notes TEXT NULL,
+  bill_date TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS bill_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bill_id TEXT NOT NULL,
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  unit_price REAL NOT NULL,
+  FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+);

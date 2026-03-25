@@ -13,6 +13,7 @@ import permissionsRoutes from "./routes/permissions.js";
 import syncRoutes from "./routes/sync.js";
 import activityRoutes from "./routes/activity.js";
 import printRoutes from "./routes/print.js";
+import billsRoutes from "./routes/bills.js";
 import { query } from "./config/database.js";
 
 const app = express();
@@ -32,6 +33,7 @@ app.use("/api/permissions", permissionsRoutes);
 app.use("/api/sync", syncRoutes);
 app.use("/api/activity", activityRoutes);
 app.use("/api/print", printRoutes);
+app.use("/api/bills", billsRoutes);
 
 /** When using SQLite and MySQL env is set, pull MySQL → SQLite on startup so desktop shows MySQL data. */
 async function syncFromMysqlIfConfigured() {
@@ -247,6 +249,33 @@ async function ensureCashinKhataEntriesTableMysql() {
   }
 }
 
+async function ensureBillsTablesMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS bills (
+      id VARCHAR(64) PRIMARY KEY,
+      customer_id VARCHAR(36) NULL,
+      customer_name VARCHAR(200) NOT NULL DEFAULT '',
+      total DECIMAL(10,2) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft',
+      notes VARCHAR(1000) NULL,
+      bill_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
+    )`);
+    await query(`CREATE TABLE IF NOT EXISTS bill_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      bill_id VARCHAR(64) NOT NULL,
+      description VARCHAR(500) NOT NULL,
+      quantity DECIMAL(10,2) NOT NULL DEFAULT 1,
+      unit_price DECIMAL(10,2) NOT NULL,
+      FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureBillsTablesMysql:", e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server listening on port ${PORT}`);
@@ -261,5 +290,6 @@ app.listen(PORT, async () => {
   await ensureKhataEntriesTableMysql();
   await ensureSupplierKhataEntriesTableMysql();
   await ensureCashinKhataEntriesTableMysql();
+  await ensureBillsTablesMysql();
   await syncFromMysqlIfConfigured();
 });
