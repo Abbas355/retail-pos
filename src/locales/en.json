@@ -13,6 +13,17 @@
     "users": "Users",
     "settings": "Settings"
   },
+  "activity": {
+    "subtitle": "Audit log of all changes",
+    "filters": "Filters",
+    "whatsappOnlyLabel": "WhatsApp only",
+    "filterCategory": "Tab",
+    "filterAll": "All tabs",
+    "empty": "No activity yet.",
+    "emptyWhatsapp": "No WhatsApp activities yet.",
+    "emptyCategory": "No activity logged for this tab yet.",
+    "exportCsv": "Export CSV"
+  },
   "settings": {
     "title": "Settings",
     "description": "Manage your store and system preferences.",
@@ -105,6 +116,8 @@
     "card": "Card",
     "customer": "Customer",
     "walkIn": "Walk-in",
+    "customerSearchPlaceholder": "Walk-in — type to search customers…",
+    "noCustomerMatch": "No customer matches",
     "each": "each",
     "noProductsMatch": "No products match"
   },

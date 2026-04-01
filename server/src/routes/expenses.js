@@ -88,6 +88,73 @@ router.post("/", async (req, res) => {
   }
 });
 
+/** GET /api/expenses/:id/activity-log – timeline for one expense (recorded + Khata returns if any). */
+router.get("/:id/activity-log", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "Expense id required" });
+
+    const [row] = await query(
+      `SELECT id, amount, category, description, date, created_at, created_by,
+              COALESCE(source, 'pos') AS source,
+              COALESCE(returned_amount, 0) AS returned_amount, returned_at
+       FROM expenses WHERE id = ?`,
+      [id]
+    );
+    if (!row) return res.status(404).json({ error: "Expense not found" });
+
+    const amount = parseFloat(row.amount) || 0;
+    const category = String(row.category || "");
+    const desc = row.description ? String(row.description).trim() : "";
+    const createdBy = row.created_by != null && String(row.created_by).trim() ? String(row.created_by).trim() : null;
+    const source = row.source && String(row.source).toLowerCase() === "whatsapp" ? "whatsapp" : "pos";
+    const createdAt = row.created_at ? toIsoPK(row.created_at) : null;
+    const expenseDate = row.date ? toIsoPK(row.date) : null;
+    const returned = parseFloat(row.returned_amount) || 0;
+
+    const entries = [];
+
+    const detailParts = [
+      `$${amount.toFixed(2)} · ${category}`,
+      desc ? `“${desc}”` : null,
+      `Source: ${source === "whatsapp" ? "WhatsApp" : "POS"}`,
+      createdBy ? `Recorded by: ${createdBy}` : null,
+    ].filter(Boolean);
+
+    entries.push({
+      kind: "recorded",
+      id: `exp-recorded-${row.id}`,
+      at: createdAt || expenseDate,
+      title: "Expense recorded",
+      detail: detailParts.join(" · "),
+    });
+
+    if (returned > 0) {
+      const full = amount > 0 && returned >= amount - 0.005;
+      entries.push({
+        kind: "return",
+        id: `exp-return-${row.id}`,
+        at: row.returned_at ? toIsoPK(row.returned_at) : null,
+        title: full ? "Fully returned (Khata)" : "Partial return (Khata)",
+        detail: `$${returned.toFixed(2)} returned of $${amount.toFixed(2)} original${full ? "" : " · balance may still be due"}`,
+      });
+    }
+
+    entries.sort((a, b) => {
+      const ta = a.at || "";
+      const tb = b.at || "";
+      if (!ta && !tb) return 0;
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return tb.localeCompare(ta);
+    });
+    res.json({ expenseId: row.id, entries });
+  } catch (err) {
+    console.error("Expense activity-log error:", err);
+    res.status(500).json({ error: "Failed to fetch expense activity" });
+  }
+});
+
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;

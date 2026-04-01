@@ -2,8 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Product, Sale, Purchase } from "@/types/pos";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { Product } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
 import { productsApi } from "@/lib/api";
 import { translateProductNameToUrdu } from "@/lib/productTranslation";
@@ -11,21 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Plus, Pencil, Trash2, Search, AlertTriangle, Languages, Barcode } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, Pencil, Search, AlertTriangle, Languages, Barcode, Eye } from "lucide-react";
 import { toast } from "sonner";
+import { formatDateTimePK } from "@/lib/utils";
 
 const NEW_CATEGORY_VALUE = "__new__";
 const emptyProduct: Partial<Product> = {
@@ -39,9 +30,24 @@ const emptyProduct: Partial<Product> = {
   lowStockThreshold: undefined,
 };
 
+function activityKindLabelClass(kind: "purchase" | "sale" | "created" | "deleted") {
+  switch (kind) {
+    case "purchase":
+      return "text-emerald-700 dark:text-emerald-300";
+    case "sale":
+      return "text-blue-700 dark:text-blue-300";
+    case "created":
+      return "text-muted-foreground";
+    case "deleted":
+      return "text-destructive";
+    default:
+      return "";
+  }
+}
+
 const InventoryPage = () => {
   const { t } = useTranslation();
-  const { user, isAdmin } = useAuth();
+  const { isAdmin } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -50,8 +56,8 @@ const InventoryPage = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>(emptyProduct);
   const [isEditing, setIsEditing] = useState(false);
   const [isNewCategory, setIsNewCategory] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [barcodeScan, setBarcodeScan] = useState("");
+  const [logProduct, setLogProduct] = useState<Product | null>(null);
 
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
@@ -59,26 +65,11 @@ const InventoryPage = () => {
     refetchOnWindowFocus: false,
   });
 
-  const [localSales] = useLocalStorage<Sale[]>("pos_sales", []);
-  const [localPurchases] = useLocalStorage<Purchase[]>("pos_purchases", []);
-
-  const productIdsWithLocalHistory = useMemo(() => {
-    const salesIds = new Set<string>();
-    localSales.forEach((s) =>
-      s.items?.forEach((i) => i.product?.id && salesIds.add(i.product.id))
-    );
-    const purchaseIds = new Set<string>();
-    localPurchases.forEach((p) =>
-      p.items?.forEach((i) => i.productId && purchaseIds.add(i.productId))
-    );
-    return { sales: salesIds, purchases: purchaseIds };
-  }, [localSales, localPurchases]);
-
-  const hasHistory = (p: Product) =>
-    p.hasSales ||
-    p.hasPurchases ||
-    productIdsWithLocalHistory.sales.has(p.id) ||
-    productIdsWithLocalHistory.purchases.has(p.id);
+  const { data: activityData, isLoading: activityLoading, isError: activityError } = useQuery({
+    queryKey: ["products", logProduct?.id, "activity-log"],
+    queryFn: () => productsApi.getActivityLog(logProduct!.id),
+    enabled: Boolean(logProduct?.id),
+  });
 
   const existingCategories = useMemo(() => {
     const set = new Set<string>();
@@ -121,20 +112,6 @@ const InventoryPage = () => {
       toast.success(t("product.productUpdated"));
     },
     onError: (err: Error) => toast.error(err.message || "Failed to update product"),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) =>
-      productsApi.delete(id, {
-        deletedBy: user?.name ?? undefined,
-        deletedByRole: user?.role ?? undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      setDeleteTarget(null);
-      toast.success(t("product.productRemoved"));
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to remove product"),
   });
 
   const openAdd = (prefillBarcode?: string) => {
@@ -202,17 +179,6 @@ const InventoryPage = () => {
     } else {
       createMutation.mutate({ name, nameUr, barcode, price, cost, stock, category, lowStockThreshold });
     }
-  };
-
-  const confirmDelete = (p: Product) => {
-    if (hasHistory(p)) {
-      toast.error("Cannot delete product with sales or purchase history.");
-      return;
-    }
-    setDeleteTarget(p);
-  };
-  const doDelete = () => {
-    if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
   };
 
   const fillUrduFromEnglish = () => {
@@ -284,6 +250,7 @@ const InventoryPage = () => {
                 <TableHead className="text-right">{t("common.stock")}</TableHead>
                 <TableHead className="text-right">{t("product.lowStockThreshold")}</TableHead>
                 {isAdmin && <TableHead className="text-right">{t("inventory.actions")}</TableHead>}
+                <TableHead className="text-right w-[72px]">Log</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -305,38 +272,28 @@ const InventoryPage = () => {
                   <TableCell className="text-right">{p.lowStockThreshold}</TableCell>
                   {isAdmin && (
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          onClick={() => openEdit(p)}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                          title="Edit"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="inline-block">
-                                <button
-                                  onClick={() => confirmDelete(p)}
-                                  disabled={hasHistory(p)}
-                                  className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title={hasHistory(p) ? "Has sales or purchase history" : "Remove"}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {hasHistory(p)
-                                ? "Cannot delete: product has sales or purchase history"
-                                : "Remove from list (record kept in database)"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openEdit(p)}
+                        className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        title="Edit"
+                        aria-label="Edit product"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
                     </TableCell>
                   )}
+                  <TableCell className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => setLogProduct(p)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      title="View product activity"
+                      aria-label="View product activity"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -346,6 +303,48 @@ const InventoryPage = () => {
           <p className="p-6 text-center text-muted-foreground">{t("product.noProductsMatch")}</p>
         )}
       </div>
+
+      <Sheet open={!!logProduct} onOpenChange={(open) => !open && setLogProduct(null)}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-lg">
+          <SheetHeader className="text-left">
+            <SheetTitle>Product activity</SheetTitle>
+            {logProduct ? (
+              <p className="text-sm font-normal text-muted-foreground">{logProduct.name}</p>
+            ) : null}
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            {activityLoading ? (
+              <p className="text-sm text-muted-foreground py-6">Loading…</p>
+            ) : activityError ? (
+              <p className="text-sm text-destructive py-6">Could not load activity.</p>
+            ) : !activityData?.entries?.length ? (
+              <p className="text-sm text-muted-foreground py-6">No sales or purchase history for this product yet.</p>
+            ) : (
+              <ScrollArea className="h-[min(70vh,32rem)] pr-3">
+                <div className="space-y-2 pb-4">
+                  {activityData.entries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2.5 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={`font-medium ${activityKindLabelClass(entry.kind)}`}>{entry.title}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatDateTimePK(entry.at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/90 leading-snug">{entry.detail}</p>
+                      {entry.meta ? (
+                        <p className="mt-1 text-xs text-muted-foreground">By {entry.meta}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-h-[90vh] flex flex-col overflow-hidden p-0 gap-0">
@@ -487,26 +486,6 @@ const InventoryPage = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("product.removeProductConfirm")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
-              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={doDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? "…" : t("common.remove")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 };

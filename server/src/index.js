@@ -206,10 +206,21 @@ async function ensureKhataEntriesTableMysql() {
       date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       link_type VARCHAR(20) NOT NULL DEFAULT 'random',
       link_id VARCHAR(64) NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_by VARCHAR(200) NULL
     )`);
   } catch (e) {
     if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureKhataEntriesTableMysql:", e.message);
+  }
+}
+
+/** Add created_by to khata_entries for older MySQL databases. */
+async function ensureKhataEntriesCreatedByMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query("ALTER TABLE khata_entries ADD COLUMN created_by VARCHAR(200) NULL");
+  } catch (e) {
+    if (!/Duplicate column|duplicate column/i.test(e.message)) console.warn("ensureKhataEntriesCreatedByMysql:", e.message);
   }
 }
 
@@ -249,6 +260,42 @@ async function ensureCashinKhataEntriesTableMysql() {
   }
 }
 
+async function ensureUsersIsDisabledMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query("ALTER TABLE users ADD COLUMN is_disabled TINYINT(1) NOT NULL DEFAULT 0");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("users.is_disabled:", e.message);
+  }
+}
+
+async function ensureUsersCreatedAtMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query("ALTER TABLE users ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP");
+  } catch (e) {
+    if (!/Duplicate column name/i.test(e.message)) console.warn("users.created_at:", e.message);
+  }
+}
+
+async function ensureUserAuditLogTableMysql() {
+  if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS user_audit_log (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      action VARCHAR(32) NOT NULL,
+      detail VARCHAR(512) NOT NULL DEFAULT '',
+      actor_id VARCHAR(36) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_user_audit_user_id (user_id),
+      INDEX idx_user_audit_created_at (created_at)
+    )`);
+  } catch (e) {
+    if (!/already exists|Table.*already exists/i.test(e.message)) console.warn("ensureUserAuditLogTableMysql:", e.message);
+  }
+}
+
 async function ensureBillsTablesMysql() {
   if ((process.env.DB_TYPE || "mysql").toLowerCase() !== "mysql") return;
   try {
@@ -280,6 +327,9 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server listening on port ${PORT}`);
   await ensureDefaultUserIfSqlite();
+  await ensureUsersIsDisabledMysql();
+  await ensureUsersCreatedAtMysql();
+  await ensureUserAuditLogTableMysql();
   await ensureActivityLogTableMysql();
   await ensureSourceColumnsMysql();
   await ensurePurchasesKhataColumnsMysql();
@@ -288,6 +338,7 @@ app.listen(PORT, async () => {
   await ensureExpensesReturnedAtMysql();
   await ensureCustomerKhataEntriesTableMysql();
   await ensureKhataEntriesTableMysql();
+  await ensureKhataEntriesCreatedByMysql();
   await ensureSupplierKhataEntriesTableMysql();
   await ensureCashinKhataEntriesTableMysql();
   await ensureBillsTablesMysql();

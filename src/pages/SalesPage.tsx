@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -6,7 +6,7 @@ import { Product, CartItem, Sale } from "@/types/pos";
 import { useAuth } from "@/context/AuthContext";
 import { customersApi, productsApi, salesApi, printApi } from "@/lib/api";
 import { getProductDisplayName } from "@/lib/productTranslation";
-import { formatDateTimePK } from "@/lib/utils";
+import { formatDateTimePK, cn } from "@/lib/utils";
 import { DEFAULT_SETTINGS, SETTINGS_STORAGE_KEY } from "@/lib/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +33,10 @@ const SalesPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const locale = i18n.language;
+  const walkInLabel = t("sales.walkIn");
+  const walkInLabelRef = useRef(walkInLabel);
+  walkInLabelRef.current = walkInLabel;
+
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
     queryFn: () => productsApi.list(),
@@ -55,6 +59,11 @@ const SalesPage = () => {
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [productNotFoundBarcode, setProductNotFoundBarcode] = useState<string | null>(null);
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [customerField, setCustomerField] = useState(walkInLabel);
+  const [customerHighlightIndex, setCustomerHighlightIndex] = useState(0);
+  const customerComboRef = useRef<HTMLDivElement>(null);
+  const customerListRef = useRef<HTMLDivElement>(null);
 
   const getSettings = () => {
     try {
@@ -85,11 +94,139 @@ const SalesPage = () => {
     queryFn: () => customersApi.list(),
   });
 
+  const customersRef = useRef(customers);
+  customersRef.current = customers;
+  const selectedCustomerRef = useRef(selectedCustomer);
+  selectedCustomerRef.current = selectedCustomer;
+  const customerFieldRef = useRef(customerField);
+  customerFieldRef.current = customerField;
+
+  const reconcileCustomerField = useCallback(() => {
+    const list = customersRef.current;
+    const sc = selectedCustomerRef.current;
+    const cf = customerFieldRef.current;
+    const w = walkInLabelRef.current;
+    const sel = sc ? list.find((c) => c.id === sc) : null;
+    if (sel) {
+      if (cf.trim() !== sel.name.trim()) setCustomerField(sel.name);
+    } else {
+      const cfTrim = cf.trim();
+      const wLower = w.toLowerCase();
+      // Keep typed name when closing the list (e.g. clicking Complete Sale) so ad-hoc customers still work
+      if (!cfTrim || cfTrim.toLowerCase() === wLower) {
+        setCustomerField(w);
+      }
+    }
+  }, []);
+
+  const filteredCustomers = useMemo(() => {
+    const raw = customerField.trim();
+    const rawLower = raw.toLowerCase();
+    const wLower = walkInLabel.toLowerCase();
+    const q = !rawLower || rawLower === wLower ? "" : raw;
+    if (!q) return customers;
+    const qLower = q.toLowerCase();
+    return customers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(qLower) ||
+        (c.phone?.toLowerCase().includes(qLower) ?? false),
+    );
+  }, [customers, customerField, walkInLabel]);
+
+  useEffect(() => {
+    if (selectedCustomerRef.current) return;
+    setCustomerField(walkInLabelRef.current);
+  }, [i18n.language, walkInLabel]);
+
+  const walkInLooksSelected =
+    !selectedCustomer && customerField.trim().toLowerCase() === walkInLabel.toLowerCase();
+
+  const walkInRowActive =
+    !selectedCustomer &&
+    (customerField.trim().toLowerCase() === walkInLabel.toLowerCase() || customerField.trim() === "");
+
+  const customerFieldIsWalkInOrEmpty =
+    customerField.trim() === "" || customerField.trim().toLowerCase() === walkInLabel.toLowerCase();
+
+  /** Hide Walk-in row while user types a real search / new name (not walk-in label). */
+  const showWalkInInDropdown =
+    customerField.trim() === "" ||
+    customerField.trim().toLowerCase() === walkInLabel.toLowerCase();
+
+  const customerDropdownMaxIndex = showWalkInInDropdown
+    ? filteredCustomers.length
+    : filteredCustomers.length > 0
+      ? filteredCustomers.length - 1
+      : -1;
+
+  useEffect(() => {
+    if (!customerPickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (customerComboRef.current?.contains(e.target as Node)) return;
+      setCustomerPickerOpen(false);
+      reconcileCustomerField();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [customerPickerOpen, reconcileCustomerField]);
+
+  const prevCustomerPickerOpen = useRef(false);
+  useEffect(() => {
+    if (!customerPickerOpen) {
+      prevCustomerPickerOpen.current = false;
+      return;
+    }
+    if (!prevCustomerPickerOpen.current) {
+      setCustomerHighlightIndex(0);
+    } else {
+      const maxIdx = showWalkInInDropdown
+        ? filteredCustomers.length
+        : filteredCustomers.length > 0
+          ? filteredCustomers.length - 1
+          : -1;
+      setCustomerHighlightIndex((i) =>
+        maxIdx < 0 ? 0 : Math.max(0, Math.min(i, maxIdx)),
+      );
+    }
+    prevCustomerPickerOpen.current = true;
+  }, [customerPickerOpen, filteredCustomers.length, showWalkInInDropdown]);
+
+  useEffect(() => {
+    if (!customerPickerOpen) return;
+    const root = customerListRef.current;
+    if (!root) return;
+    const el = root.querySelector(`[data-customer-option-index="${customerHighlightIndex}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [customerHighlightIndex, customerPickerOpen, filteredCustomers.length, showWalkInInDropdown]);
+
+  const applyCustomerOptionIndex = (idx: number) => {
+    if (showWalkInInDropdown) {
+      if (idx === 0) {
+        setSelectedCustomer("");
+        setCustomerField(walkInLabel);
+        setCustomerPickerOpen(false);
+        return;
+      }
+      const c = filteredCustomers[idx - 1];
+      if (!c) return;
+      setSelectedCustomer(c.id);
+      setCustomerField(c.name);
+    } else {
+      const c = filteredCustomers[idx];
+      if (!c) return;
+      setSelectedCustomer(c.id);
+      setCustomerField(c.name);
+    }
+    setCustomerPickerOpen(false);
+  };
+
   const createCustomerMutation = useMutation({
     mutationFn: (data: { name: string; phone?: string }) => customersApi.create(data),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       setSelectedCustomer(created.id);
+      setCustomerField(created.name);
+      setCustomerPickerOpen(false);
       setIsAddingCustomer(false);
       setNewCustomerName("");
       setNewCustomerPhone("");
@@ -233,10 +370,7 @@ const SalesPage = () => {
       toast.error("Cart is empty");
       return;
     }
-    if ((payMode === "credit" || payMode === "partial") && !selectedCustomer) {
-      toast.error("Select a customer for credit or partial payment");
-      return;
-    }
+
     let paidAmount: number;
     if (payMode === "full") paidAmount = total;
     else if (payMode === "credit") paidAmount = 0;
@@ -248,12 +382,50 @@ const SalesPage = () => {
       }
       paidAmount = parsed;
     }
+
+    // Use ref so name survives any blur/reconcile ordering when clicking Complete Sale
+    const rawCustomerName = customerFieldRef.current.trim();
+    const wLabel = walkInLabelRef.current;
+    const isWalkInField =
+      rawCustomerName === "" || rawCustomerName.toLowerCase() === wLabel.toLowerCase();
+
+    let customerIdToUse: string | undefined = selectedCustomer || undefined;
+
+    if (!customerIdToUse && !isWalkInField) {
+      const byName = customers.find(
+        (c) => c.name.trim().toLowerCase() === rawCustomerName.toLowerCase(),
+      );
+      if (byName) {
+        customerIdToUse = byName.id;
+      } else {
+        try {
+          // Sales-field quick add: name only (phone optional on Customers page later)
+          const created = await customersApi.create({ name: rawCustomerName });
+          customerIdToUse = created.id;
+          queryClient.invalidateQueries({ queryKey: ["customers"] });
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not save new customer");
+          return;
+        }
+      }
+    }
+
+    if ((payMode === "credit" || payMode === "partial") && !customerIdToUse) {
+      toast.error("Select a customer or enter a customer name for credit or partial payment");
+      return;
+    }
+
+    const itemsPayload = cart.map((i) => ({
+      product: { id: i.product.id, name: i.product.name, price: i.product.price },
+      quantity: i.quantity,
+    }));
+
     const sale: Sale = {
       id: `sale-${Date.now()}`,
       items: cart,
       total,
       paymentMethod,
-      customerId: selectedCustomer || undefined,
+      customerId: customerIdToUse,
       date: new Date().toISOString(),
       cashier: user?.name || "Unknown",
       subtotal,
@@ -267,15 +439,17 @@ const SalesPage = () => {
     setDiscountValue("");
     setPaidAmountInput("");
     setPayMode("full");
+    setSelectedCustomer("");
+    setCustomerField(walkInLabelRef.current);
     const statusText = paidAmount >= total ? "completed" : paidAmount > 0 ? `partial ($${paidAmount.toFixed(2)} paid, $${(total - paidAmount).toFixed(2)} in khata)` : `credit ($${total.toFixed(2)} in khata)`;
     toast.success(`Sale ${statusText}!`);
     try {
       await salesApi.create({
-        items: cart.map((i) => ({ product: { id: i.product.id, name: i.product.name, price: i.product.price }, quantity: i.quantity })),
+        items: itemsPayload,
         total,
         paymentMethod,
         cashier: user?.name || "Unknown",
-        customerId: selectedCustomer || undefined,
+        customerId: customerIdToUse,
         paidAmount,
       });
       queryClient.invalidateQueries({ queryKey: ["sales"] });
@@ -286,9 +460,9 @@ const SalesPage = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] gap-5 animate-slide-in">
+    <div className="flex h-[calc(100vh-3rem)] min-h-0 gap-5 animate-slide-in">
       {/* Left: Product catalog - constrained so cart gets more space */}
-      <div className="flex flex-1 flex-col overflow-hidden min-w-0 max-w-3xl">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 max-w-3xl">
         <div className="relative mb-4 shrink-0 w-full min-w-0 p-2">
           <Search className="absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
@@ -367,8 +541,8 @@ const SalesPage = () => {
         </div>
       </div>
 
-      {/* Right: Current Order - professional layout */}
-      <div className="flex w-[440px] min-w-[400px] shrink-0 flex-col card-elevated rounded-lg overflow-hidden border">
+      {/* Right: Current Order — min-h-0 + flex-1 cart so footers (subtotal / Complete Sale) are never clipped */}
+      <div className="flex h-full min-h-0 w-[440px] min-w-[400px] shrink-0 flex-col card-elevated rounded-lg overflow-hidden border">
         {/* 1. Title */}
         <div className="shrink-0 px-4 py-3 border-b bg-muted/30">
           <h2 className="font-heading text-lg font-semibold flex items-center gap-2">
@@ -392,19 +566,140 @@ const SalesPage = () => {
             </div>
           ) : (
             <div className="flex gap-2">
-              <Select value={selectedCustomer || "none"} onValueChange={(v) => setSelectedCustomer(v === "none" ? "" : v)} className="flex-1">
-                <SelectTrigger className="h-9">
-                  <SelectValue placeholder="Walk-in customer" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Walk-in customer</SelectItem>
-                  {customers.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div ref={customerComboRef} className="relative flex-1 min-w-0">
+                <Input
+                  className={cn(
+                    "h-9 transition-colors",
+                    walkInLooksSelected &&
+                      "border-primary/70 bg-primary/10 font-medium text-foreground shadow-sm ring-1 ring-primary/25",
+                  )}
+                  placeholder={customerField.trim() === "" ? t("sales.customerSearchPlaceholder") : undefined}
+                  value={customerField}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCustomerField(v);
+                    setCustomerPickerOpen(true);
+                    setCustomerHighlightIndex(0);
+                    const sel = selectedCustomer ? customers.find((c) => c.id === selectedCustomer) : null;
+                    if (!v.trim()) setSelectedCustomer("");
+                    else if (sel && v.trim() !== sel.name.trim()) setSelectedCustomer("");
+                  }}
+                  onFocus={() => {
+                    setCustomerPickerOpen(true);
+                    setCustomerHighlightIndex(0);
+                    if (
+                      !selectedCustomer &&
+                      customerField.trim().toLowerCase() === walkInLabel.toLowerCase()
+                    ) {
+                      setCustomerField("");
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    const maxIdx = customerDropdownMaxIndex;
+
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setCustomerPickerOpen(false);
+                      reconcileCustomerField();
+                      return;
+                    }
+
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      if (!customerPickerOpen) {
+                        setCustomerPickerOpen(true);
+                        setCustomerHighlightIndex(0);
+                        return;
+                      }
+                      if (maxIdx < 0) return;
+                      setCustomerHighlightIndex((i) => Math.min(maxIdx, i + 1));
+                      return;
+                    }
+
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      if (!customerPickerOpen) return;
+                      if (maxIdx < 0) return;
+                      setCustomerHighlightIndex((i) => Math.max(0, i - 1));
+                      return;
+                    }
+
+                    if (e.key === "Enter") {
+                      if (!customerPickerOpen) return;
+                      e.preventDefault();
+                      const idx = customerHighlightIndex;
+                      if (maxIdx < 0 || idx < 0 || idx > maxIdx) return;
+                      applyCustomerOptionIndex(idx);
+                      return;
+                    }
+                  }}
+                  autoComplete="off"
+                  aria-expanded={customerPickerOpen}
+                  aria-controls="sales-customer-suggestions"
+                  aria-autocomplete="list"
+                  role="combobox"
+                />
+                {customerPickerOpen && (
+                  <div
+                    ref={customerListRef}
+                    id="sales-customer-suggestions"
+                    role="listbox"
+                    className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[min(280px,50vh)] overflow-y-auto rounded-md border bg-popover py-1 text-popover-foreground shadow-md"
+                  >
+                    {showWalkInInDropdown && (
+                      <button
+                        type="button"
+                        data-customer-option-index={0}
+                        role="option"
+                        aria-selected={walkInRowActive}
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground",
+                          customerHighlightIndex === 0 &&
+                            "bg-accent font-medium ring-1 ring-inset ring-primary/35",
+                          customerHighlightIndex !== 0 && walkInRowActive && "bg-accent/50 font-medium",
+                        )}
+                        onMouseEnter={() => setCustomerHighlightIndex(0)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => applyCustomerOptionIndex(0)}
+                      >
+                        {walkInLabel}
+                      </button>
+                    )}
+                    {filteredCustomers.length === 0 ? (
+                      <div className="px-3 py-2 text-center text-sm text-muted-foreground">{t("sales.noCustomerMatch")}</div>
+                    ) : (
+                      filteredCustomers.map((c, i) => {
+                        const optionIdx = showWalkInInDropdown ? i + 1 : i;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            data-customer-option-index={optionIdx}
+                            role="option"
+                            aria-selected={selectedCustomer === c.id}
+                            className={cn(
+                              "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground",
+                              customerHighlightIndex === optionIdx &&
+                                "bg-accent font-medium ring-1 ring-inset ring-primary/35",
+                              selectedCustomer === c.id &&
+                                customerHighlightIndex !== optionIdx &&
+                                "bg-accent/50",
+                            )}
+                            onMouseEnter={() => setCustomerHighlightIndex(optionIdx)}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => applyCustomerOptionIndex(optionIdx)}
+                          >
+                            <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                            {c.phone ? (
+                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{c.phone}</span>
+                            ) : null}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
               <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={() => setIsAddingCustomer(true)} title="Add customer">
                 <Plus className="h-4 w-4" />
               </Button>
@@ -412,8 +707,8 @@ const SalesPage = () => {
           )}
         </div>
 
-        {/* 3. Cart items - large scrollable section */}
-        <div className="flex-1 min-h-[200px] overflow-y-auto px-4 py-3">
+        {/* 3. Cart items — scrolls; min-h-0 so payment footer stays in view */}
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
           {cart.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
               <ShoppingBag className="h-12 w-12 mb-2 opacity-40" strokeWidth={1.5} />
@@ -445,46 +740,53 @@ const SalesPage = () => {
           )}
         </div>
 
-        {/* Subtotal - above payment, no scroll needed */}
-        <div className="shrink-0 px-4 py-2 border-t bg-muted/10 flex justify-between items-baseline">
-          <span className="text-sm text-muted-foreground">Subtotal</span>
-          <span className="font-semibold font-heading">${subtotal.toFixed(2)}</span>
-        </div>
-
-        {/* 4. Payment controls */}
-        <div className="shrink-0 px-4 py-3 border-t space-y-3 bg-muted/20">
+        {/* Payment method & discount */}
+        <div className="shrink-0 px-4 py-2 border-t bg-muted/10">
           <div className="flex items-end justify-between gap-4">
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Payment method</Label>
+            <div className="min-w-0">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">{t("sales.paymentMethod")}</Label>
               <div className="flex flex-wrap gap-1.5">
                 {(["cash", "card"] as const).map((m) => (
-                <Button key={m} variant={paymentMethod === m ? "default" : "outline"} size="sm" className="h-8 text-xs" onClick={() => setPaymentMethod(m)}>
-                  {m === "cash" && <Banknote className="mr-1 h-3.5 w-3.5" />}
-                  {m === "card" && <CreditCard className="mr-1 h-3.5 w-3.5" />}
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </Button>
-              ))}
+                  <Button key={m} variant={paymentMethod === m ? "default" : "outline"} size="sm" className="h-8 text-xs" onClick={() => setPaymentMethod(m)}>
+                    {m === "cash" && <Banknote className="mr-1 h-3.5 w-3.5" />}
+                    {m === "card" && <CreditCard className="mr-1 h-3.5 w-3.5" />}
+                    {t(`sales.${m}`)}
+                  </Button>
+                ))}
               </div>
             </div>
             <div className="shrink-0">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Discount</Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">{t("sales.discount")}</Label>
               <div className="flex items-center gap-1.5">
                 <Select value={discountType} onValueChange={(v) => setDiscountType(v as "percent" | "fixed")}>
                   <SelectTrigger className="w-14 h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="percent">%</SelectItem><SelectItem value="fixed">$</SelectItem></SelectContent>
                 </Select>
-                <Input type="number" min={0} step={discountType === "percent" ? 1 : 0.01} placeholder={discountType === "percent" ? "0–100" : "0"} value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} className="w-14 h-8 text-xs" />
+                <Input
+                  type="number"
+                  min={0}
+                  step={discountType === "percent" ? 1 : 0.01}
+                  placeholder={discountType === "percent" ? "0–100" : "0"}
+                  value={discountValue}
+                  onChange={(e) => setDiscountValue(e.target.value)}
+                  className={cn(
+                    "h-8 w-14 text-xs [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                  )}
+                />
                 {discountValue && <Button type="button" variant="ghost" size="sm" className="h-8 text-xs px-1.5" onClick={clearDiscount}>Clear</Button>}
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Payment type (Pay now / Pay later / Partial) */}
+        <div className="shrink-0 px-4 py-3 border-t space-y-2 bg-muted/20">
           <div>
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment type</Label>
             <div className="flex flex-wrap gap-1 items-center">
               <Button variant={payMode === "full" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => { setPayMode("full"); setPaidAmountInput(""); }}>Pay now</Button>
               <Button variant={payMode === "credit" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => { setPayMode("credit"); setPaidAmountInput(""); }} title="Requires customer">Pay later</Button>
               <Button variant={payMode === "partial" ? "default" : "outline"} size="sm" className="h-7 text-xs px-2" onClick={() => setPayMode("partial")} title="Requires customer">Partial</Button>
-              <Button size="sm" className="h-7 text-xs px-2 font-semibold" onClick={completeSale} disabled={cart.length === 0}>Complete Sale</Button>
             </div>
             {payMode === "partial" && (
               <div className="flex items-center gap-2 mt-2">
@@ -492,26 +794,42 @@ const SalesPage = () => {
                 <Input id="paid-amt" type="number" min={0} step={0.01} max={total} placeholder={`0–${total.toFixed(2)}`} value={paidAmountInput} onChange={(e) => setPaidAmountInput(e.target.value)} className="h-8 w-24 text-sm" />
               </div>
             )}
-            {(payMode === "credit" || payMode === "partial") && !selectedCustomer && (
-              <p className="text-xs text-amber-600 mt-1">Select a customer for credit/partial</p>
+            {(payMode === "credit" || payMode === "partial") &&
+              !selectedCustomer &&
+              customerFieldIsWalkInOrEmpty && (
+              <p className="text-xs text-amber-600 mt-1">Select a customer or type a name for credit/partial</p>
             )}
           </div>
         </div>
 
-        {/* 5. Totals - sticky footer */}
-        <div className="shrink-0 px-4 py-3 border-t space-y-2 bg-background">
-            {discountAmount > 0 && (
-              <div className="flex justify-between text-sm text-destructive">
-                <span>Discount</span>
-                <span>−${discountAmount.toFixed(2)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-lg font-bold pt-1">
-              <span>Total</span>
-              <span className="font-heading">${total.toFixed(2)}</span>
-            </div>
-          </div>
+        {/* Subtotal */}
+        <div className="shrink-0 border-t bg-muted/10 px-4 py-2 flex justify-between items-baseline">
+          <span className="text-sm text-muted-foreground">{t("sales.subtotal")}</span>
+          <span className="font-semibold font-heading tabular-nums">${subtotal.toFixed(2)}</span>
         </div>
+
+        {/* Totals + Complete Sale */}
+        <div className="shrink-0 space-y-3 border-t bg-background px-4 py-3">
+          {discountAmount > 0 && (
+            <div className="flex justify-between text-sm text-destructive">
+              <span>{t("sales.discount")}</span>
+              <span>−${discountAmount.toFixed(2)}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-lg font-bold">
+            <span>{t("sales.total")}</span>
+            <span className="font-heading tabular-nums">${total.toFixed(2)}</span>
+          </div>
+          <Button
+            type="button"
+            className="h-10 w-full font-semibold"
+            onClick={completeSale}
+            disabled={cart.length === 0}
+          >
+            Complete Sale
+          </Button>
+        </div>
+      </div>
 
       <Dialog open={!!receiptSale} onOpenChange={() => setReceiptSale(null)}>
         <DialogContent className="max-w-sm">

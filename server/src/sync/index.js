@@ -10,6 +10,7 @@ const TABLES = [
   "permissions",
   "role_permissions",
   "users",
+  "user_audit_log",
   "products",
   "customers",
   "suppliers",

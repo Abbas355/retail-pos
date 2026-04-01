@@ -55,7 +55,7 @@ router.get("/entries", async (req, res) => {
     const { type, from, to } = req.query;
     const colDate = isSqlite ? "date" : "`date`";
     const dateFn = isSqlite ? "date" : "DATE";
-    let sql = `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at FROM khata_entries WHERE 1=1`;
+    let sql = `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at, created_by FROM khata_entries WHERE 1=1`;
     const params = [];
     if (type && (type === "in" || type === "out")) {
       sql += " AND type = ?";
@@ -75,6 +75,8 @@ router.get("/entries", async (req, res) => {
       date: r.entry_date ? new Date(r.entry_date).toISOString() : (r.created_at ? new Date(r.created_at).toISOString() : null),
       linkType: r.link_type || "random",
       linkId: r.link_id ?? null,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+      createdBy: r.created_by != null && String(r.created_by).trim() ? String(r.created_by).trim() : null,
     }));
     res.json(result);
   } catch (err) {
@@ -86,7 +88,7 @@ router.get("/entries", async (req, res) => {
 /** POST /api/khata/entries – create general in/out khata entry. */
 router.post("/entries", async (req, res) => {
   try {
-    const { type, amount, note, date: reqDate, linkType, linkId } = req.body;
+    const { type, amount, note, date: reqDate, linkType, linkId, createdBy: reqCreatedBy } = req.body;
     if (!type || (type !== "in" && type !== "out")) {
       return res.status(400).json({ error: "type must be 'in' or 'out'" });
     }
@@ -100,14 +102,16 @@ router.post("/entries", async (req, res) => {
     const dateVal = reqDate ? toDbDateTimePK(reqDate) : toDbDateTimePK(new Date());
     const noteVal = note != null ? String(note).trim() : "";
     const linkIdVal = linkId != null && String(linkId).trim() ? String(linkId).trim() : null;
+    const createdByVal =
+      reqCreatedBy != null && String(reqCreatedBy).trim() ? String(reqCreatedBy).trim().slice(0, 200) : null;
 
     await query(
-      `INSERT INTO khata_entries (id, type, amount, note, date, link_type, link_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [entryId, type, amt, noteVal, dateVal, link, linkIdVal]
+      `INSERT INTO khata_entries (id, type, amount, note, date, link_type, link_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [entryId, type, amt, noteVal, dateVal, link, linkIdVal, createdByVal]
     );
 
     const [row] = await query(
-      `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at FROM khata_entries WHERE id = ?`,
+      `SELECT id, type, amount, note, ${colDate} AS entry_date, link_type, link_id, created_at, created_by FROM khata_entries WHERE id = ?`,
       [entryId]
     );
     const created = {
@@ -118,6 +122,8 @@ router.post("/entries", async (req, res) => {
       date: row.entry_date ? new Date(row.entry_date).toISOString() : (row.created_at ? new Date(row.created_at).toISOString() : null),
       linkType: row.link_type || "random",
       linkId: row.link_id ?? null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      createdBy: row.created_by != null && String(row.created_by).trim() ? String(row.created_by).trim() : null,
     };
     res.status(201).json(created);
   } catch (err) {

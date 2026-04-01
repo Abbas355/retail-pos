@@ -157,6 +157,112 @@ router.get("/stock-report/out", async (req, res) => {
   }
 });
 
+/** GET /api/products/:id/activity-log – merged timeline: purchases, sales, created, delete audit. */
+router.get("/:id/activity-log", async (req, res) => {
+  try {
+    const productId = String(req.params.id || "").trim();
+    if (!productId) return res.status(400).json({ error: "Product id required" });
+
+    const [prod] = await query("SELECT id, name, created_at FROM products WHERE id = ?", [productId]);
+    if (!prod) return res.status(404).json({ error: "Product not found" });
+
+    const purchaseRows = await query(
+      `SELECT pi.id AS line_id, pi.quantity, pi.cost, p.id AS purchase_id, p.created_at AS occurred_at,
+              sup.name AS supplier_name
+       FROM purchase_items pi
+       INNER JOIN purchases p ON p.id = pi.purchase_id
+       LEFT JOIN suppliers sup ON sup.id = p.supplier_id
+       WHERE pi.product_id = ?
+       ORDER BY p.created_at DESC
+       LIMIT 400`,
+      [productId]
+    );
+
+    const saleRows = await query(
+      `SELECT si.id AS line_id, si.quantity, si.unit_price, s.id AS sale_id, s.created_at AS occurred_at,
+              s.cashier, s.payment_method
+       FROM sale_items si
+       INNER JOIN sales s ON s.id = si.sale_id
+       WHERE si.product_id = ?
+       ORDER BY s.created_at DESC
+       LIMIT 400`,
+      [productId]
+    );
+
+    let deleteRows = [];
+    try {
+      deleteRows = await query(
+        `SELECT created_at, summary, deleted_by FROM activity_log
+         WHERE type = 'delete_product' AND entity_id = ?
+         ORDER BY created_at DESC`,
+        [productId]
+      );
+    } catch (_) {
+      deleteRows = [];
+    }
+
+    const entries = [];
+
+    if (prod.created_at) {
+      entries.push({
+        kind: "created",
+        id: `created-${productId}`,
+        at: new Date(prod.created_at).toISOString(),
+        title: "Product added",
+        detail: prod.name ? `"${prod.name}" added to inventory` : "Added to inventory",
+      });
+    }
+
+    for (const r of purchaseRows || []) {
+      const qty = Number(r.quantity) || 0;
+      const cost = parseFloat(r.cost) || 0;
+      const sup = r.supplier_name ? String(r.supplier_name) : "Supplier";
+      entries.push({
+        kind: "purchase",
+        id: `pi-${r.line_id}-${r.purchase_id}`,
+        at: r.occurred_at ? new Date(r.occurred_at).toISOString() : null,
+        title: "Stock in (purchase)",
+        detail: `Qty ${qty} × $${cost.toFixed(2)} · ${sup} · ${r.purchase_id}`,
+        refId: r.purchase_id,
+      });
+    }
+
+    for (const r of saleRows || []) {
+      const qty = Number(r.quantity) || 0;
+      const price = parseFloat(r.unit_price) || 0;
+      const pm = (r.payment_method || "cash").toLowerCase() === "card" ? "Card" : "Cash";
+      const cashier = r.cashier ? String(r.cashier) : "";
+      entries.push({
+        kind: "sale",
+        id: `si-${r.line_id}-${r.sale_id}`,
+        at: r.occurred_at ? new Date(r.occurred_at).toISOString() : null,
+        title: "Stock out (sale)",
+        detail: `Qty ${qty} × $${price.toFixed(2)} · ${pm}${cashier ? ` · ${cashier}` : ""} · ${r.sale_id}`,
+        refId: r.sale_id,
+      });
+    }
+
+    for (const r of deleteRows || []) {
+      entries.push({
+        kind: "deleted",
+        id: `del-${r.created_at}-${productId}`,
+        at: r.created_at ? new Date(r.created_at).toISOString() : null,
+        title: "Product deleted",
+        detail: r.summary
+          ? String(r.summary)
+          : "Removed from active inventory",
+        meta: r.deleted_by ? String(r.deleted_by) : null,
+      });
+    }
+
+    entries.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+    res.json({ productId, productName: prod.name || "", entries });
+  } catch (err) {
+    console.error("Product activity-log error:", err);
+    res.status(500).json({ error: "Failed to fetch product activity" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const [row] = await query(

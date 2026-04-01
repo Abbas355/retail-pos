@@ -19,6 +19,9 @@ export async function login(req, res) {
     if (!user || !(await authModel.verifyPassword(password, user.password_hash))) {
       return res.status(401).json({ error: "Invalid username or password" });
     }
+    if (Number(user.is_disabled) === 1) {
+      return res.status(403).json({ error: "This account has been disabled." });
+    }
     const permissions = await permissionModel.getPermissionsForRole(user.role);
     const payload = authView.toLoginResponse(user, permissions);
     res.json(payload);

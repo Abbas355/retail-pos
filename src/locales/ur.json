@@ -13,6 +13,17 @@
     "users": "صارفین",
     "settings": "ترتیبات"
   },
+  "activity": {
+    "subtitle": "تمام تبدیلیوں کا آڈٹ لاگ",
+    "filters": "فلٹر",
+    "whatsappOnlyLabel": "صرف واٹس ایپ",
+    "filterCategory": "ٹیب",
+    "filterAll": "تمام ٹیبز",
+    "empty": "ابھی کوئی سرگرمی نہیں۔",
+    "emptyWhatsapp": "ابھی کوئی واٹس ایپ سرگرمی نہیں۔",
+    "emptyCategory": "اس ٹیب کے لیے ابھی کوئی سرگرمی نہیں۔",
+    "exportCsv": "CSV برآمد کریں"
+  },
   "settings": {
     "title": "ترتیبات",
     "description": "اپنے اسٹور اور سسٹم کی ترجیحات منظم کریں۔",
@@ -105,6 +116,8 @@
     "card": "کارڈ",
     "customer": "گاہک",
     "walkIn": "واک ان",
+    "customerSearchPlaceholder": "واک ان — گاہک تلاش کریں…",
+    "noCustomerMatch": "کوئی گاہک نہیں ملا",
     "each": "فی",
     "noProductsMatch": "کوئی پروڈکٹ نہیں ملا"
   },

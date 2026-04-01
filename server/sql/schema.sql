@@ -7,7 +7,19 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('admin', 'manager', 'cashier') NOT NULL DEFAULT 'cashier',
   name VARCHAR(100) NOT NULL,
+  is_disabled TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_audit_log (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  action VARCHAR(32) NOT NULL,
+  detail VARCHAR(512) NOT NULL DEFAULT '',
+  actor_id VARCHAR(36) NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_user_audit_user_id (user_id),
+  INDEX idx_user_audit_created_at (created_at)
 );
 
 CREATE TABLE IF NOT EXISTS permissions (

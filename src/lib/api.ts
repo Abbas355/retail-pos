@@ -43,9 +43,23 @@ export async function login(username: string, password: string) {
   });
 }
 
+export type ProductActivityEntry = {
+  kind: "purchase" | "sale" | "created" | "deleted";
+  id: string;
+  at: string | null;
+  title: string;
+  detail: string;
+  refId?: string;
+  meta?: string | null;
+};
+
 export const productsApi = {
   list: () => fetchApi<any[]>("/products"),
   get: (id: string) => fetchApi(`/products/${id}`),
+  getActivityLog: (id: string) =>
+    fetchApi<{ productId: string; productName: string; entries: ProductActivityEntry[] }>(
+      `/products/${encodeURIComponent(id)}/activity-log`
+    ),
   getByBarcode: (barcode: string) => fetchApi<any>(`/products/by-barcode/${encodeURIComponent(barcode)}`),
   create: (data: { name: string; nameUr?: string; barcode?: string; price: number; cost?: number; stock?: number; category?: string; lowStockThreshold?: number }) =>
     fetchApi("/products", { method: "POST", body: JSON.stringify(data) }),
@@ -61,9 +75,23 @@ export const productsApi = {
   },
 };
 
+export type CustomerActivityEntry = {
+  kind: "created" | "sale" | "sale_payment" | "khata_udhaar" | "khata_payment";
+  id: string;
+  at: string | null;
+  title: string;
+  detail: string;
+  refId?: string;
+  meta?: string | null;
+};
+
 export const customersApi = {
   list: () => fetchApi("/customers"),
   get: (id: string) => fetchApi(`/customers/${id}`),
+  getActivityLog: (id: string) =>
+    fetchApi<{ customerId: string; customerName: string; entries: CustomerActivityEntry[] }>(
+      `/customers/${encodeURIComponent(id)}/activity-log`
+    ),
   create: (data: { name: string; phone?: string }) => fetchApi("/customers", { method: "POST", body: JSON.stringify(data) }),
   update: (id: string, data: { name: string; phone?: string }) => fetchApi(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   delete: (id: string, options?: { deletedBy?: string }) => {
@@ -76,9 +104,23 @@ export const customersApi = {
   },
 };
 
+export type SupplierActivityEntry = {
+  kind: "created" | "purchase" | "purchase_payment" | "khata_udhaar" | "khata_payment";
+  id: string;
+  at: string | null;
+  title: string;
+  detail: string;
+  refId?: string;
+  meta?: string | null;
+};
+
 export const suppliersApi = {
   list: () => fetchApi("/suppliers"),
   get: (id: string) => fetchApi(`/suppliers/${id}`),
+  getActivityLog: (id: string) =>
+    fetchApi<{ supplierId: string; supplierName: string; entries: SupplierActivityEntry[] }>(
+      `/suppliers/${encodeURIComponent(id)}/activity-log`
+    ),
   create: (data: { name: string; phone?: string; email?: string }) => fetchApi("/suppliers", { method: "POST", body: JSON.stringify(data) }),
   update: (id: string, data: { name: string; phone?: string; email?: string }) => fetchApi(`/suppliers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   delete: (id: string, options?: { deletedBy?: string }) => {
@@ -230,6 +272,7 @@ export const khataApi = {
     date?: string;
     linkType?: "random" | "customer" | "supplier" | "cashin";
     linkId?: string;
+    createdBy?: string;
   }) =>
     fetchApi<KhataEntry>("/khata/entries", { method: "POST", body: JSON.stringify(data) }),
   deleteKhataEntry: (id: string) =>
@@ -244,6 +287,10 @@ export interface KhataEntry {
   date: string | null;
   linkType: "random" | "customer" | "supplier" | "cashin";
   linkId: string | null;
+  /** Server timestamp when the row was saved */
+  createdAt: string | null;
+  /** Display name or username of the user who recorded the entry */
+  createdBy: string | null;
 }
 
 export const purchasesApi = {
@@ -262,6 +309,14 @@ export const purchasesApi = {
     }>(`/purchases/${encodeURIComponent(purchaseId)}/payments`, { method: "POST", body: JSON.stringify(data) }),
 };
 
+export type ExpenseActivityEntry = {
+  kind: "recorded" | "return";
+  id: string;
+  at: string | null;
+  title: string;
+  detail: string;
+};
+
 export const expensesApi = {
   list: (params?: { from?: string; to?: string; category?: string }) => {
     const q = new URLSearchParams(params as Record<string, string>).toString();
@@ -269,6 +324,10 @@ export const expensesApi = {
   },
   create: (data: { amount: number; category: string; description?: string; date?: string }) =>
     fetchApi<import("@/types/pos").Expense>("/expenses", { method: "POST", body: JSON.stringify(data) }),
+  getActivityLog: (id: string) =>
+    fetchApi<{ expenseId: string; entries: ExpenseActivityEntry[] }>(
+      `/expenses/${encodeURIComponent(id)}/activity-log`
+    ),
   delete: (id: string) => fetchApi(`/expenses/${id}`, { method: "DELETE" }),
 };
 
@@ -277,14 +336,37 @@ export interface ApiUser {
   username: string;
   role: string;
   name: string;
+  disabled?: boolean;
 }
+
+export type UserActivityEntry = {
+  kind: "created" | "updated" | "password_changed" | "login_disabled" | "login_enabled" | "deleted";
+  id: string;
+  at: string | null;
+  title: string;
+  detail: string;
+  meta?: string | null;
+};
+
 export const usersApi = {
   list: () => fetchApi<ApiUser[]>("/users"),
   get: (id: string) => fetchApi<ApiUser>(`/users/${id}`),
+  getActivityLog: (id: string) =>
+    fetchApi<{ userId: string; username: string; entries: UserActivityEntry[] }>(
+      `/users/${encodeURIComponent(id)}/activity-log`
+    ),
   create: (data: { username: string; password: string; name: string; role: string }) =>
     fetchApi("/users", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: { name?: string; role?: string; password?: string }) =>
-    fetchApi(`/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  update: (
+    id: string,
+    data: { name?: string; role?: string; password?: string; disabled?: boolean },
+    options?: { currentUserId?: string }
+  ) =>
+    fetchApi(`/users/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+      ...(options?.currentUserId != null && { headers: { "X-User-Id": options.currentUserId } }),
+    }),
   delete: (id: string, options?: { currentUserId?: string }) =>
     fetchApi(`/users/${id}`, { method: "DELETE", ...(options?.currentUserId != null && { headers: { "X-User-Id": options.currentUserId } }) }),
 };
@@ -334,10 +416,11 @@ export interface ActivityItem {
   cashier?: string | null;
 }
 export const activityApi = {
-  list: (params?: { limit?: number; source?: "whatsapp" }) => {
+  list: (params?: { limit?: number; source?: "whatsapp"; category?: string }) => {
     const search = new URLSearchParams();
     if (params?.limit != null) search.set("limit", String(Math.min(100, Math.max(1, params.limit))));
     if (params?.source === "whatsapp") search.set("source", "whatsapp");
+    if (params?.category && params.category !== "all") search.set("category", params.category);
     return fetchApi<ActivityItem[]>(`/activity${search.toString() ? `?${search}` : ""}`);
   },
 };

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { khataApi, salesApi, purchasesApi } from "@/lib/api";
+import { khataApi, salesApi, purchasesApi, type KhataEntry } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,9 +20,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Wallet, Banknote, CreditCard, Search, X, Eye, Users, Truck, ArrowDownToLine, Plus, ArrowDownLeft, ArrowUpRight, BookOpen, ArrowDownCircle, ArrowUpCircle, Trash2 } from "lucide-react";
+import { Wallet, Banknote, CreditCard, Search, X, Eye, Users, Truck, ArrowDownToLine, Plus, ArrowDownLeft, ArrowUpRight, BookOpen, ArrowDownCircle, ArrowUpCircle, Trash2, Filter } from "lucide-react";
 import { toast } from "sonner";
 
 type LedgerRow = {
@@ -58,8 +61,91 @@ type SupplierLedgerPurchase = {
   type: "purchase";
 };
 
+const formatKhataDateTime = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return "—";
+  }
+};
+
+const khataLinkTypeLabel = (lt: KhataEntry["linkType"]) => {
+  switch (lt) {
+    case "random":
+      return "None";
+    case "customer":
+      return "Customer";
+    case "supplier":
+      return "Supplier";
+    case "cashin":
+      return "Cash in";
+    default:
+      return lt;
+  }
+};
+
+const KhataEntryDetailsButton = ({ entry }: { entry: KhataEntry }) => (
+  <Popover>
+    <PopoverTrigger asChild>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+        aria-label="Entry details"
+      >
+        <Eye className="h-4 w-4" />
+      </Button>
+    </PopoverTrigger>
+    <PopoverContent className="w-[min(100vw-2rem,20rem)] p-4" align="end" sideOffset={8}>
+      <div className="space-y-3 text-sm">
+        <p className="font-semibold text-foreground">Entry details</p>
+        <dl className="space-y-2.5">
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Type</dt>
+            <dd className="font-medium text-right">{entry.type === "in" ? "In" : "Out"}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Amount</dt>
+            <dd className="font-mono font-medium tabular-nums text-right">
+              {entry.type === "in" ? "+" : "-"}${entry.amount.toFixed(2)}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Entry date</dt>
+            <dd className="text-right">{formatKhataDateTime(entry.date)}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Recorded at</dt>
+            <dd className="text-right">{formatKhataDateTime(entry.createdAt)}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Recorded by</dt>
+            <dd className="min-w-0 text-right break-words">{entry.createdBy?.trim() || "—"}</dd>
+          </div>
+          {entry.note ? (
+            <div className="border-t border-border/80 pt-2">
+              <dt className="text-muted-foreground">Note</dt>
+              <dd className="mt-1 text-foreground">{entry.note}</dd>
+            </div>
+          ) : null}
+          <div className="flex justify-between gap-3 border-t border-border/80 pt-2">
+            <dt className="text-muted-foreground shrink-0">Link</dt>
+            <dd className="max-w-[12rem] text-right text-xs break-all">
+              {khataLinkTypeLabel(entry.linkType)}
+              {entry.linkId ? ` · ${entry.linkId}` : ""}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </PopoverContent>
+  </Popover>
+);
+
 const KhataPage = () => {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [recordingPaymentFor, setRecordingPaymentFor] = useState<{
     sales: LedgerRow[];
@@ -130,6 +216,8 @@ const KhataPage = () => {
   const [generalEntryDate, setGeneralEntryDate] = useState("");
   const [generalEntryLinkType, setGeneralEntryLinkType] = useState<"random" | "customer" | "supplier" | "cashin">("random");
   const [generalEntryLinkId, setGeneralEntryLinkId] = useState("");
+  const [khataActivitiesOpen, setKhataActivitiesOpen] = useState(false);
+  const [khataTotalsFilterOpen, setKhataTotalsFilterOpen] = useState(false);
 
   const hasDateFilter = !!(totalsFrom && totalsTo);
   const { data: totals, isLoading: totalsLoading } = useQuery({
@@ -404,6 +492,7 @@ const KhataPage = () => {
       date?: string;
       linkType?: "random" | "customer" | "supplier" | "cashin";
       linkId?: string;
+      createdBy?: string;
     }) => khataApi.createKhataEntry(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["khata", "entries"] });
@@ -416,15 +505,6 @@ const KhataPage = () => {
       toast.success("Entry saved");
     },
     onError: (err: Error) => toast.error(err.message || "Failed to save entry"),
-  });
-
-  const deleteKhataEntryMutation = useMutation({
-    mutationFn: (id: string) => khataApi.deleteKhataEntry(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["khata", "entries"] });
-      toast.success("Entry removed");
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to remove entry"),
   });
 
   const createSupplierKhataEntryMutation = useMutation({
@@ -509,164 +589,158 @@ const KhataPage = () => {
   };
 
   const totalsMaxDate = new Date().toLocaleDateString("en-CA");
+  const totalsDateFilterActive = !!(totalsFrom || totalsTo);
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Wallet className="h-8 w-8 text-primary" />
-          <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <Wallet className="h-8 w-8 shrink-0 text-primary" />
+          <div className="min-w-0">
             <h1 className="text-2xl font-heading font-bold">Khata</h1>
             <p className="text-sm text-muted-foreground">
               Customers and suppliers — credit and outstanding amounts
             </p>
           </div>
         </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Label htmlFor="totals-from" className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
-          <Input
-            id="totals-from"
-            type="date"
-            value={totalsFrom}
-            onChange={(e) => setTotalsFrom(e.target.value)}
-            max={totalsMaxDate}
-            className="h-9 min-w-[150px] w-40"
-          />
-          <Label htmlFor="totals-to" className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
-          <Input
-            id="totals-to"
-            type="date"
-            value={totalsTo}
-            onChange={(e) => setTotalsTo(e.target.value)}
-            max={totalsMaxDate}
-            className="h-9 min-w-[150px] w-40"
-          />
-          {(totalsFrom || totalsTo) && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-9 text-xs"
-              onClick={() => { setTotalsFrom(""); setTotalsTo(""); }}
-            >
-              Clear
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 max-w-md">
-        <div
-          className="rounded-lg border border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30 px-4 py-3 flex items-center gap-3"
-          aria-label="Total debit"
-        >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
-            <ArrowDownLeft className="h-4 w-4 text-red-600 dark:text-red-400" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-red-800 dark:text-red-200">Debit</p>
-            <p className="text-lg font-bold tabular-nums text-red-700 dark:text-red-300">
-              {totalsLoading ? "…" : `$${(totals?.totalDebit ?? 0).toFixed(2)}`}
-            </p>
-          </div>
-        </div>
-        <div
-          className="rounded-lg border border-green-200 bg-green-50 dark:border-green-900/50 dark:bg-green-950/30 px-4 py-3 flex items-center gap-3"
-          aria-label="Total credit"
-        >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/50">
-            <ArrowUpRight className="h-4 w-4 text-green-600 dark:text-green-400" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-green-800 dark:text-green-200">Credit</p>
-            <p className="text-lg font-bold tabular-nums text-green-700 dark:text-green-300">
-              {totalsLoading ? "…" : `$${(totals?.totalCredit ?? 0).toFixed(2)}`}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="default"
-          size="sm"
-          className="bg-green-600 hover:bg-green-700"
-          onClick={() => {
-            setGeneralEntryType("in");
-            setGeneralEntryAmount("");
-            setGeneralEntryNote("");
-            setGeneralEntryDate("");
-            setGeneralEntryLinkType("random");
-            setGeneralEntryLinkId("");
-            setGeneralEntryOpen(true);
-          }}
-        >
-          <ArrowUpRight className="h-4 w-4 mr-1" /> Add In Khata
-        </Button>
-        <Button
-          variant="default"
-          size="sm"
-          className="bg-red-600 hover:bg-red-700"
-          onClick={() => {
-            setGeneralEntryType("out");
-            setGeneralEntryAmount("");
-            setGeneralEntryNote("");
-            setGeneralEntryDate("");
-            setGeneralEntryLinkType("random");
-            setGeneralEntryLinkId("");
-            setGeneralEntryOpen(true);
-          }}
-        >
-          <ArrowDownLeft className="h-4 w-4 mr-1" /> Add Out Khata
-        </Button>
-      </div>
-
-      <div className="space-y-3">
-        <h2 className="font-heading text-sm font-semibold text-muted-foreground">Khata entries</h2>
-        {khataEntriesLoading ? (
-          <p className="text-sm text-muted-foreground py-4">Loading…</p>
-        ) : khataEntriesList.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4">No entries yet. Use Add In Khata or Add Out Khata above.</p>
-        ) : (
-          <div className="space-y-2 max-h-[240px] overflow-y-auto">
-            {khataEntriesList.map((e) => (
-              <div
-                key={e.id}
-                className={`rounded-lg border p-3 flex items-center justify-between gap-3 ${
-                  e.type === "in"
-                    ? "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
-                    : "border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-950/20"
-                }`}
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm capitalize">{e.type === "in" ? "In" : "Out"}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {e.date ? new Date(e.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}
-                  </p>
-                  <p className="text-xs text-muted-foreground truncate">{e.note || (e.linkType !== "random" ? e.linkType : "—")}</p>
+        <div className="flex flex-wrap items-center gap-2 shrink-0 sm:justify-end sm:pt-1">
+          <Popover open={khataTotalsFilterOpen} onOpenChange={setKhataTotalsFilterOpen}>
+            <PopoverTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="h-9 gap-2">
+                <Filter className="h-4 w-4 shrink-0" />
+                <span>Filters</span>
+                {totalsDateFilterActive ? (
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
+                ) : null}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[min(100vw-2rem,20rem)] p-4" align="end">
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-foreground">Debit and credit totals</p>
+                <p className="text-xs text-muted-foreground">
+                  Filter totals by date range (both dates required to apply).
+                </p>
+                <Separator />
+                <div className="space-y-2">
+                  <Label htmlFor="khata-totals-from" className="text-xs font-medium text-muted-foreground">
+                    From
+                  </Label>
+                  <Input
+                    id="khata-totals-from"
+                    type="date"
+                    value={totalsFrom}
+                    onChange={(e) => setTotalsFrom(e.target.value)}
+                    max={totalsMaxDate}
+                    className="h-9 w-full"
+                  />
                 </div>
-                <div className="shrink-0 flex items-center gap-2">
-                  <span className={`font-semibold tabular-nums ${e.type === "in" ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300"}`}>
-                    {e.type === "in" ? "+" : "-"}${e.amount.toFixed(2)}
-                  </span>
+                <div className="space-y-2">
+                  <Label htmlFor="khata-totals-to" className="text-xs font-medium text-muted-foreground">
+                    To
+                  </Label>
+                  <Input
+                    id="khata-totals-to"
+                    type="date"
+                    value={totalsTo}
+                    onChange={(e) => setTotalsTo(e.target.value)}
+                    max={totalsMaxDate}
+                    className="h-9 w-full"
+                  />
+                </div>
+                {totalsDateFilterActive ? (
                   <Button
+                    type="button"
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                    onClick={() => deleteKhataEntryMutation.mutate(e.id)}
-                    disabled={deleteKhataEntryMutation.isPending}
-                    aria-label="Remove entry"
+                    size="sm"
+                    className="h-9 w-full text-xs"
+                    onClick={() => {
+                      setTotalsFrom("");
+                      setTotalsTo("");
+                    }}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    Clear dates
                   </Button>
-                </div>
+                ) : null}
               </div>
-            ))}
+            </PopoverContent>
+          </Popover>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 w-fit shrink-0"
+            onClick={() => setKhataActivitiesOpen(true)}
+          >
+            Show activities
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-stretch sm:justify-between sm:gap-4">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 sm:self-center">
+          <Button
+            variant="default"
+            size="sm"
+            className="bg-green-600 hover:bg-green-700"
+            onClick={() => {
+              setGeneralEntryType("in");
+              setGeneralEntryAmount("");
+              setGeneralEntryNote("");
+              setGeneralEntryDate("");
+              setGeneralEntryLinkType("random");
+              setGeneralEntryLinkId("");
+              setGeneralEntryOpen(true);
+            }}
+          >
+            <ArrowUpRight className="h-4 w-4 mr-1" /> Add In Khata
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
+            className="bg-red-600 hover:bg-red-700"
+            onClick={() => {
+              setGeneralEntryType("out");
+              setGeneralEntryAmount("");
+              setGeneralEntryNote("");
+              setGeneralEntryDate("");
+              setGeneralEntryLinkType("random");
+              setGeneralEntryLinkId("");
+              setGeneralEntryOpen(true);
+            }}
+          >
+            <ArrowDownLeft className="h-4 w-4 mr-1" /> Add Out Khata
+          </Button>
+        </div>
+        <div className="grid gap-3 grid-cols-2 max-w-md w-full sm:w-auto sm:max-w-md sm:ml-auto">
+          <div
+            className="rounded-lg border border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30 px-4 py-3 flex items-center gap-3"
+            aria-label="Total debit"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
+              <ArrowDownLeft className="h-4 w-4 text-red-600 dark:text-red-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-red-800 dark:text-red-200">Debit</p>
+              <p className="text-lg font-bold tabular-nums text-red-700 dark:text-red-300">
+                {totalsLoading ? "…" : `$${(totals?.totalDebit ?? 0).toFixed(2)}`}
+              </p>
+            </div>
           </div>
-        )}
+          <div
+            className="rounded-lg border border-green-200 bg-green-50 dark:border-green-900/50 dark:bg-green-950/30 px-4 py-3 flex items-center gap-3"
+            aria-label="Total credit"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/50">
+              <ArrowUpRight className="h-4 w-4 text-green-600 dark:text-green-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-green-800 dark:text-green-200">Credit</p>
+              <p className="text-lg font-bold tabular-nums text-green-700 dark:text-green-300">
+                {totalsLoading ? "…" : `$${(totals?.totalCredit ?? 0).toFixed(2)}`}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       <Dialog open={generalEntryOpen} onOpenChange={setGeneralEntryOpen}>
@@ -759,6 +833,7 @@ const KhataPage = () => {
               onClick={() => {
                 const amount = parseFloat(generalEntryAmount);
                 if (Number.isNaN(amount) || amount <= 0) return;
+                const recordedBy = (user?.name?.trim() || user?.username?.trim()) || undefined;
                 createGeneralKhataEntryMutation.mutate({
                   type: generalEntryType,
                   amount,
@@ -766,6 +841,7 @@ const KhataPage = () => {
                   date: generalEntryDate.trim() || undefined,
                   linkType: generalEntryLinkType,
                   linkId: generalEntryLinkId.trim() || undefined,
+                  ...(recordedBy ? { createdBy: recordedBy } : {}),
                 });
               }}
             >
@@ -775,16 +851,68 @@ const KhataPage = () => {
         </DialogContent>
       </Dialog>
 
+      <Sheet open={khataActivitiesOpen} onOpenChange={setKhataActivitiesOpen}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-md">
+          <SheetHeader className="text-left">
+            <SheetTitle>Khata entries</SheetTitle>
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
+            {khataEntriesLoading ? (
+              <p className="text-sm text-muted-foreground py-4">Loading…</p>
+            ) : khataEntriesList.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">
+                No entries yet. Use Add In Khata or Add Out Khata above.
+              </p>
+            ) : (
+              <div className="space-y-2 overflow-y-auto pr-1 pb-4">
+                {khataEntriesList.map((e) => (
+                  <div
+                    key={e.id}
+                    className={`rounded-lg border p-3 flex items-center justify-between gap-3 ${
+                      e.type === "in"
+                        ? "border-green-200 bg-green-50/50 dark:border-green-900/50 dark:bg-green-950/20"
+                        : "border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-950/20"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-sm capitalize">{e.type === "in" ? "In" : "Out"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {e.date
+                          ? new Date(e.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                          : "—"}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {e.note || (e.linkType !== "random" ? e.linkType : "—")}
+                      </p>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-1">
+                      <span
+                        className={`font-semibold tabular-nums ${
+                          e.type === "in" ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300"
+                        }`}
+                      >
+                        {e.type === "in" ? "+" : "-"}${e.amount.toFixed(2)}
+                      </span>
+                      <KhataEntryDetailsButton entry={e} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "customers" | "suppliers" | "cashin")}>
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid h-auto min-h-10 w-full max-w-md grid-cols-3">
           <TabsTrigger value="customers" className="flex items-center gap-2">
-            <Users className="h-4 w-4" /> Customers
+            <Users className="h-4 w-4 shrink-0" /> Customers
           </TabsTrigger>
           <TabsTrigger value="suppliers" className="flex items-center gap-2">
-            <Truck className="h-4 w-4" /> Suppliers
+            <Truck className="h-4 w-4 shrink-0" /> Suppliers
           </TabsTrigger>
           <TabsTrigger value="cashin" className="flex items-center gap-2">
-            <ArrowDownToLine className="h-4 w-4" /> Cash in
+            <ArrowDownToLine className="h-4 w-4 shrink-0" /> Cash in
           </TabsTrigger>
         </TabsList>
 

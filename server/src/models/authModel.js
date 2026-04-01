@@ -7,7 +7,7 @@ import bcrypt from "bcryptjs";
 
 export async function findByUsername(username) {
   const rows = await query(
-    "SELECT id, username, password_hash, role, name FROM users WHERE username = ?",
+    "SELECT id, username, password_hash, role, name, COALESCE(is_disabled, 0) AS is_disabled FROM users WHERE username = ?",
     [username]
   );
   return rows[0] || null;

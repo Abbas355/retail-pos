@@ -49,6 +49,51 @@ function ensureSoftDeleteColumns() {
 }
 ensureSoftDeleteColumns();
 
+/** Ensure users.is_disabled exists (block login when set). */
+function ensureUsersIsDisabledColumn() {
+  try {
+    const info = db.prepare("PRAGMA table_info(users)").all();
+    if (!info.some((col) => col.name === "is_disabled")) {
+      db.exec("ALTER TABLE users ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0");
+    }
+  } catch (e) {
+    if (!/duplicate column name/i.test(e.message)) throw e;
+  }
+}
+ensureUsersIsDisabledColumn();
+
+/** Ensure users.created_at exists (account timeline). */
+function ensureUsersCreatedAtColumn() {
+  try {
+    const info = db.prepare("PRAGMA table_info(users)").all();
+    if (!info.some((col) => col.name === "created_at")) {
+      db.exec("ALTER TABLE users ADD COLUMN created_at TEXT");
+    }
+  } catch (e) {
+    if (!/duplicate column name/i.test(e.message)) throw e;
+  }
+}
+ensureUsersCreatedAtColumn();
+
+/** Audit log for user profile / password / login status changes. */
+function ensureUserAuditLogTable() {
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS user_audit_log (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      actor_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_user_audit_log_user_id ON user_audit_log(user_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_user_audit_log_created_at ON user_audit_log(created_at)");
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+  }
+}
+ensureUserAuditLogTable();
+
 /** Ensure expenses table exists (for DBs created before expenses feature). */
 function ensureExpensesTable() {
   const sql = `CREATE TABLE IF NOT EXISTS expenses (
@@ -238,7 +283,8 @@ function ensureKhataEntriesTable() {
     date TEXT NOT NULL DEFAULT (datetime('now')),
     link_type TEXT NOT NULL DEFAULT 'random' CHECK (link_type IN ('random', 'customer', 'supplier', 'cashin')),
     link_id TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    created_by TEXT
   )`;
   try {
     db.exec(sql);
@@ -248,6 +294,17 @@ function ensureKhataEntriesTable() {
   }
 }
 ensureKhataEntriesTable();
+
+function ensureKhataEntriesCreatedByColumn() {
+  try {
+    db.exec("ALTER TABLE khata_entries ADD COLUMN created_by TEXT");
+  } catch (e) {
+    if (!/duplicate column name/i.test(String(e.message))) {
+      console.warn("ensureKhataEntriesCreatedByColumn:", e.message);
+    }
+  }
+}
+ensureKhataEntriesCreatedByColumn();
 
 /** Manual khata entries per supplier (same as customer: udhaar added / payment received). */
 function ensureSupplierKhataEntriesTable() {

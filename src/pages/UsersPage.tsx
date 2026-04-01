@@ -1,25 +1,19 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { usersApi, permissionsApi, type ApiUser } from "@/lib/api";
+import { usersApi, permissionsApi, type ApiUser, type UserActivityEntry } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Pencil, Trash2, Check, UserCog } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, Pencil, Check, UserCog, Eye } from "lucide-react";
 import { toast } from "sonner";
+import { formatDateTimePK } from "@/lib/utils";
 
 const ROLES = ["admin", "manager", "cashier"] as const;
 
@@ -45,13 +39,36 @@ function permissionToLabel(key: string): string {
   return map[key] ?? key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function activityKindLabelClass(kind: UserActivityEntry["kind"]) {
+  switch (kind) {
+    case "password_changed":
+      return "text-amber-600 dark:text-amber-400";
+    case "login_disabled":
+    case "deleted":
+      return "text-destructive";
+    case "login_enabled":
+      return "text-emerald-600 dark:text-emerald-400";
+    case "updated":
+      return "text-blue-600 dark:text-blue-400";
+    case "created":
+    default:
+      return "text-muted-foreground";
+  }
+}
+
 const UsersPage = () => {
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<ApiUser | null>(null);
-  const [form, setForm] = useState({ username: "", name: "", role: "cashier" as string, password: "" });
-  const [deleteTarget, setDeleteTarget] = useState<ApiUser | null>(null);
+  const [form, setForm] = useState({
+    username: "",
+    name: "",
+    role: "cashier" as string,
+    password: "",
+    disabled: false,
+  });
+  const [logUser, setLogUser] = useState<ApiUser | null>(null);
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
@@ -68,39 +85,38 @@ const UsersPage = () => {
     queryFn: () => permissionsApi.listRolePermissions(),
   });
 
+  const { data: activityData, isLoading: activityLoading, isError: activityError } = useQuery({
+    queryKey: ["users", logUser?.id, "activity-log"],
+    queryFn: () => usersApi.getActivityLog(logUser!.id),
+    enabled: Boolean(logUser?.id),
+  });
+
   const createMutation = useMutation({
     mutationFn: (data: { username: string; password: string; name: string; role: string }) =>
       usersApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       setDialogOpen(false);
-      setForm({ username: "", name: "", role: "cashier", password: "" });
+      setForm({ username: "", name: "", role: "cashier", password: "", disabled: false });
       toast.success("User created");
     },
     onError: (err: Error) => toast.error(err.message || "Failed to create user"),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name?: string; role?: string; password?: string } }) =>
-      usersApi.update(id, data),
+    mutationFn: (vars: {
+      id: string;
+      data: { name?: string; role?: string; password?: string; disabled?: boolean };
+      currentUserId?: string;
+    }) => usersApi.update(vars.id, vars.data, { currentUserId: vars.currentUserId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       setDialogOpen(false);
       setEditingUser(null);
-      setForm({ username: "", name: "", role: "cashier", password: "" });
+      setForm({ username: "", name: "", role: "cashier", password: "", disabled: false });
       toast.success("User updated");
     },
     onError: (err: Error) => toast.error(err.message || "Failed to update user"),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => usersApi.delete(id, { currentUserId: currentUser?.id }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-      setDeleteTarget(null);
-      toast.success("User removed");
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to delete user"),
   });
 
   const roleHasPermission = (role: string, permissionKey: string) =>
@@ -108,13 +124,19 @@ const UsersPage = () => {
 
   const openAdd = () => {
     setEditingUser(null);
-    setForm({ username: "", name: "", role: "cashier", password: "" });
+    setForm({ username: "", name: "", role: "cashier", password: "", disabled: false });
     setDialogOpen(true);
   };
 
   const openEdit = (u: ApiUser) => {
     setEditingUser(u);
-    setForm({ username: u.username, name: u.name, role: u.role, password: "" });
+    setForm({
+      username: u.username,
+      name: u.name,
+      role: u.role,
+      password: "",
+      disabled: Boolean(u.disabled),
+    });
     setDialogOpen(true);
   };
 
@@ -129,8 +151,10 @@ const UsersPage = () => {
         data: {
           name: form.name.trim(),
           role: form.role,
+          disabled: form.disabled,
           ...(form.password ? { password: form.password } : {}),
         },
+        currentUserId: currentUser?.id,
       });
     } else {
       if (!form.username?.trim() || !form.password) {
@@ -146,10 +170,6 @@ const UsersPage = () => {
     }
   };
 
-  const doDelete = () => {
-    if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
-  };
-
   const roleHasAnyForLabel = (role: string, label: string) => {
     const keysForLabel = permissions
       .filter((p) => permissionToLabel(p.permission_key) === label)
@@ -160,6 +180,8 @@ const UsersPage = () => {
   const permissionLabels = Array.from(
     new Set(permissions.map((p) => permissionToLabel(p.permission_key)))
   ).sort();
+
+  const editingSelf = Boolean(editingUser && currentUser?.id === editingUser.id);
 
   return (
     <div className="space-y-6 animate-slide-in">
@@ -180,6 +202,7 @@ const UsersPage = () => {
               <TableHead>Username</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Role</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -189,22 +212,31 @@ const UsersPage = () => {
                 <TableCell className="font-medium">{u.username}</TableCell>
                 <TableCell>{u.name}</TableCell>
                 <TableCell className="capitalize">{u.role}</TableCell>
+                <TableCell>
+                  {u.disabled ? (
+                    <span className="text-xs font-medium text-destructive">Login disabled</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Active</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
                     <button
+                      type="button"
+                      onClick={() => setLogUser(u)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      title="Activity log"
+                      aria-label="Activity log"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => openEdit(u)}
                       className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                       title="Edit"
                     >
                       <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteTarget(u)}
-                      disabled={currentUser?.id === u.id}
-                      className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50 disabled:pointer-events-none"
-                      title="Delete"
-                    >
-                      <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </TableCell>
@@ -318,6 +350,30 @@ const UsersPage = () => {
                 </SelectContent>
               </Select>
             </div>
+            {editingUser && (
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/80 bg-muted/20 px-3 py-3">
+                <div className="space-y-0.5 min-w-0">
+                  <Label htmlFor="user-disable-login" className="text-sm">
+                    Disable login
+                  </Label>
+                  <p className="text-xs text-muted-foreground leading-snug">
+                    When enabled, this user cannot sign in until you turn this off.
+                  </p>
+                  {editingSelf && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500 pt-0.5">
+                      You cannot disable your own account.
+                    </p>
+                  )}
+                </div>
+                <Switch
+                  id="user-disable-login"
+                  checked={form.disabled}
+                  onCheckedChange={(checked) => setForm((f) => ({ ...f, disabled: checked }))}
+                  disabled={editingSelf}
+                  className="shrink-0"
+                />
+              </div>
+            )}
             <div className="grid gap-1.5">
               <Label>Password {editingUser && "(leave blank to keep current)"}</Label>
               <Input
@@ -342,26 +398,49 @@ const UsersPage = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove user?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete &quot;{deleteTarget?.username}&quot;. They will no longer be
-              able to sign in.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={doDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? "Removing…" : "Remove"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Sheet open={!!logUser} onOpenChange={(open) => !open && setLogUser(null)}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-lg">
+          <SheetHeader className="text-left">
+            <SheetTitle>User activity</SheetTitle>
+            {logUser ? (
+              <p className="text-sm font-normal text-muted-foreground">
+                {logUser.name || logUser.username} · @{logUser.username}
+              </p>
+            ) : null}
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            {activityLoading ? (
+              <p className="text-sm text-muted-foreground py-6">Loading…</p>
+            ) : activityError ? (
+              <p className="text-sm text-destructive py-6">Could not load activity.</p>
+            ) : !activityData?.entries?.length ? (
+              <p className="text-sm text-muted-foreground py-6">No activity recorded for this user yet.</p>
+            ) : (
+              <ScrollArea className="h-[min(70vh,32rem)] pr-3">
+                <div className="space-y-2 pb-4">
+                  {activityData.entries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2.5 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={`font-medium ${activityKindLabelClass(entry.kind)}`}>{entry.title}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatDateTimePK(entry.at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/90 leading-snug">{entry.detail}</p>
+                      {entry.meta ? (
+                        <p className="mt-1 text-xs text-muted-foreground">By {entry.meta}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };

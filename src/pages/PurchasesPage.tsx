@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { productsApi, suppliersApi, purchasesApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -7,11 +7,43 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Trash2, UserPlus, PackagePlus, Banknote, CreditCard } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, Trash2, UserPlus, PackagePlus, Banknote, CreditCard, Activity } from "lucide-react";
 import { toast } from "sonner";
-import { formatDatePK } from "@/lib/utils";
+import { formatDatePK, formatDateTimePK } from "@/lib/utils";
 
-type PurchaseItemRow = { productId: string; productName: string; quantity: number; cost: number };
+type PurchaseItemRow = { productId: string; productName: string; quantity: string; cost: string };
+
+function lineQuantityNumber(q: string): number {
+  const n = parseInt(String(q).replace(/\D/g, ""), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Allow digits and a single decimal point (e.g. "", "0", "12", "12.5", ".5" while typing). */
+function sanitizeCostInput(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  const dot = cleaned.indexOf(".");
+  if (dot === -1) return cleaned;
+  return cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, "");
+}
+
+function lineCostNumber(s: string): number {
+  const t = s.trim();
+  if (t === "" || t === ".") return 0;
+  const n = parseFloat(t);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** Row from GET /purchases (used for activity log flattening). */
+type ApiPurchaseRow = {
+  id: string;
+  supplierId: string;
+  total: number;
+  paidAmount?: number;
+  date: string | null;
+  items?: { productId: string; productName: string; quantity: number; cost: number }[];
+};
 
 const PurchasesPage = () => {
   const queryClient = useQueryClient();
@@ -27,6 +59,7 @@ const PurchasesPage = () => {
   const [newProductOpen, setNewProductOpen] = useState(false);
   const [newProductForRow, setNewProductForRow] = useState<number | null>(null);
   const [newProductForm, setNewProductForm] = useState({ name: "", price: "", cost: "", category: "" });
+  const [purchaseActivityOpen, setPurchaseActivityOpen] = useState(false);
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
     queryKey: ["products"],
@@ -70,12 +103,20 @@ const PurchasesPage = () => {
         setItems((prev) =>
           prev.map((item, idx) =>
             idx === forRow
-              ? { productId: created.id, productName: created.name, quantity: item.quantity || 1, cost: created.cost ?? 0 }
+              ? {
+                  productId: created.id,
+                  productName: created.name,
+                  quantity: item.quantity,
+                  cost: String(created.cost ?? 0),
+                }
               : item
           )
         );
       } else {
-        setItems((prev) => [...prev, { productId: created.id, productName: created.name, quantity: 1, cost: created.cost ?? 0 }]);
+        setItems((prev) => [
+          ...prev,
+          { productId: created.id, productName: created.name, quantity: "0", cost: String(created.cost ?? 0) },
+        ]);
       }
       setNewProductOpen(false);
       setNewProductForRow(null);
@@ -113,7 +154,7 @@ const PurchasesPage = () => {
     onError: (err: Error) => toast.error(err.message || "Failed to record purchase"),
   });
 
-  const addItem = () => setItems([...items, { productId: "", productName: "", quantity: 1, cost: 0 }]);
+  const addItem = () => setItems([...items, { productId: "", productName: "", quantity: "0", cost: "0" }]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
   const updateItem = (i: number, field: keyof PurchaseItemRow, value: string | number) =>
     setItems(items.map((item, idx) => (idx === i ? { ...item, [field]: value } : item)));
@@ -124,7 +165,8 @@ const PurchasesPage = () => {
       const productCost = Number(p.cost);
       const productPrice = Number(p.price);
       // Use product's cost if set and > 0, otherwise use price so the field shows existing value; user can edit either way
-      const cost = productCost > 0 ? productCost : (productPrice >= 0 ? productPrice : 0);
+      const costNum = productCost > 0 ? productCost : productPrice >= 0 ? productPrice : 0;
+      const cost = String(costNum);
       setItems((prev) =>
         prev.map((item, idx) =>
           idx === i
@@ -135,7 +177,7 @@ const PurchasesPage = () => {
     }
   };
 
-  const total = items.reduce((sum, i) => sum + i.cost * i.quantity, 0);
+  const total = items.reduce((sum, i) => sum + lineCostNumber(i.cost) * lineQuantityNumber(i.quantity), 0);
   const amountDue = Math.max(0, total - amountPaid);
 
   const recordPurchase = () => {
@@ -148,10 +190,20 @@ const PurchasesPage = () => {
       toast.error("Select a product for every item");
       return;
     }
+    const invalidQty = items.some((i) => lineQuantityNumber(i.quantity) <= 0);
+    if (invalidQty) {
+      toast.error("Enter a quantity greater than zero for every item");
+      return;
+    }
     const pay = Math.max(0, Math.min(amountPaid, total));
     createPurchaseMutation.mutate({
       supplierId: selectedSupplier,
-      items: items.map((i) => ({ productId: i.productId, productName: i.productName, quantity: i.quantity, cost: i.cost })),
+      items: items.map((i) => ({
+        productId: i.productId,
+        productName: i.productName,
+        quantity: lineQuantityNumber(i.quantity),
+        cost: lineCostNumber(i.cost),
+      })),
       total,
       paidAmount: pay,
       paymentMethod,
@@ -196,14 +248,94 @@ const PurchasesPage = () => {
 
   const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name ?? id;
 
+  const purchaseProductLogs = useMemo(() => {
+    const supplierById = new Map(suppliers.map((s) => [s.id, s.name ?? s.id]));
+    const lines: {
+      key: string;
+      purchaseId: string;
+      date: string | null;
+      supplierName: string;
+      productName: string;
+      quantity: number;
+      unitCost: number;
+      lineTotal: number;
+    }[] = [];
+    for (const p of purchases as ApiPurchaseRow[]) {
+      const sname = supplierById.get(p.supplierId) ?? p.supplierId;
+      const items = p.items ?? [];
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
+        const qty = Number(it.quantity) || 0;
+        const cost = Number(it.cost) || 0;
+        lines.push({
+          key: `${p.id}-${idx}-${it.productId}`,
+          purchaseId: p.id,
+          date: p.date ?? null,
+          supplierName: sname,
+          productName: it.productName || "—",
+          quantity: qty,
+          unitCost: cost,
+          lineTotal: qty * cost,
+        });
+      }
+    }
+    lines.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return lines;
+  }, [purchases, suppliers]);
+
   return (
     <div className="space-y-5 animate-slide-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="font-heading text-2xl font-bold">Purchases</h1>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="mr-1 h-4 w-4" /> New Purchase
-        </Button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={() => setPurchaseActivityOpen(true)}>
+            <Activity className="mr-1 h-4 w-4" /> View activity
+          </Button>
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="mr-1 h-4 w-4" /> New Purchase
+          </Button>
+        </div>
       </div>
+
+      <Sheet open={purchaseActivityOpen} onOpenChange={setPurchaseActivityOpen}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-lg">
+          <SheetHeader className="text-left">
+            <SheetTitle>Purchase activity</SheetTitle>
+            <p className="text-sm font-normal text-muted-foreground">
+              Each line is one product on a recorded purchase (purchase-related only).
+            </p>
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            {purchasesLoading ? (
+              <p className="text-sm text-muted-foreground py-6">Loading…</p>
+            ) : purchaseProductLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6">No purchase line items yet.</p>
+            ) : (
+              <ScrollArea className="h-[min(70vh,32rem)] pr-3">
+                <div className="space-y-2 pb-4">
+                  {purchaseProductLogs.map((row) => (
+                    <div
+                      key={row.key}
+                      className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2.5 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-medium text-foreground leading-snug">{row.productName}</p>
+                        <span className="shrink-0 font-semibold tabular-nums">${row.lineTotal.toFixed(2)}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatDateTimePK(row.date)} · {row.supplierName}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Qty {row.quantity} × ${row.unitCost.toFixed(2)} · Purchase {row.purchaseId}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <div className="card-elevated overflow-hidden">
         <Table>
@@ -306,20 +438,24 @@ const PurchasesPage = () => {
                   </Select>
                   <Input
                     className="w-20"
-                    type="number"
-                    min={1}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
                     placeholder="Qty"
-                    value={item.quantity || ""}
-                    onChange={(e) => updateItem(i, "quantity", Number(e.target.value) || 1)}
+                    value={item.quantity}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, "");
+                      updateItem(i, "quantity", digits);
+                    }}
                   />
                   <Input
                     className="w-24"
-                    type="number"
-                    min={0}
-                    step={0.01}
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
                     placeholder="Cost"
-                    value={item.cost ?? ""}
-                    onChange={(e) => updateItem(i, "cost", parseFloat(e.target.value) || 0)}
+                    value={item.cost}
+                    onChange={(e) => updateItem(i, "cost", sanitizeCostInput(e.target.value))}
                   />
                   <button
                     type="button"

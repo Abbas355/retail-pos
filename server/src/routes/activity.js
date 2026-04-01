@@ -4,9 +4,27 @@ import { query } from "../config/database.js";
 const router = Router();
 const isSqlite = (process.env.DB_TYPE || "mysql").toLowerCase() === "sqlite";
 
+/** Activity types allowed per sidebar tab (category query). */
+const CATEGORY_ACTIVITY_TYPES = {
+  all: null,
+  dashboard: null,
+  sales: new Set(["sale", "void_sale"]),
+  /** Audit-only rows from activity_log (deletes / void sale). */
+  activity: new Set(["delete_product", "delete_customer", "delete_supplier", "delete_expense", "void_sale"]),
+  khata: new Set(["payment"]),
+  inventory: new Set(["add_product", "delete_product"]),
+  purchases: new Set(["add_purchase"]),
+  expenses: new Set(["expense", "delete_expense"]),
+  customers: new Set(["add_customer", "delete_customer"]),
+  suppliers: new Set(["add_supplier", "delete_supplier"]),
+  reports: new Set(),
+  users: new Set(),
+  settings: new Set(),
+};
+
 /**
- * GET /api/activity?limit=50&source=whatsapp
- * Audit log: recent sales and expenses. Optional source=whatsapp to filter.
+ * GET /api/activity?limit=50&source=whatsapp&category=sales
+ * Audit log merged from multiple tables. Optional category filters by app tab.
  */
 router.get("/", async (req, res) => {
   try {
@@ -132,7 +150,27 @@ router.get("/", async (req, res) => {
       createdAt: pay.created_at ? new Date(pay.created_at).toISOString() : null,
     }));
 
-    const combined = [...saleActions, ...expenseActions, ...customerActions, ...supplierActions, ...productActions, ...purchaseActions, ...paymentActions, ...deleteActions]
+    let combined = [
+      ...saleActions,
+      ...expenseActions,
+      ...customerActions,
+      ...supplierActions,
+      ...productActions,
+      ...purchaseActions,
+      ...paymentActions,
+      ...deleteActions,
+    ];
+
+    const rawCat = String(req.query.category || "all").toLowerCase().trim();
+    const category = Object.prototype.hasOwnProperty.call(CATEGORY_ACTIVITY_TYPES, rawCat) ? rawCat : "all";
+    const allowedTypes = CATEGORY_ACTIVITY_TYPES[category];
+    if (allowedTypes && allowedTypes.size === 0) {
+      combined = [];
+    } else if (allowedTypes && allowedTypes.size > 0) {
+      combined = combined.filter((item) => allowedTypes.has(item.type));
+    }
+
+    combined = combined
       .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
       .slice(0, limit);
 

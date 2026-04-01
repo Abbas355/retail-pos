@@ -1,38 +1,43 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Customer } from "@/types/pos";
-import { useAuth } from "@/context/AuthContext";
 import { customersApi } from "@/lib/api";
 import { salesApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Eye, Pencil, Trash2 } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, Eye, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { formatDateTimePK } from "@/lib/utils";
+import type { CustomerActivityEntry } from "@/lib/api";
 
 const emptyCustomer = { name: "", phone: "" };
 
+function activityKindLabelClass(kind: CustomerActivityEntry["kind"]) {
+  switch (kind) {
+    case "sale":
+      return "text-blue-600 dark:text-blue-400";
+    case "sale_payment":
+    case "khata_payment":
+      return "text-emerald-600 dark:text-emerald-400";
+    case "khata_udhaar":
+      return "text-amber-600 dark:text-amber-400";
+    case "created":
+    default:
+      return "text-muted-foreground";
+  }
+}
+
 const CustomersPage = () => {
-  const { user, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [form, setForm] = useState(emptyCustomer);
-  const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+  const [logCustomer, setLogCustomer] = useState<Customer | null>(null);
 
   const { data: customers = [], isLoading: customersLoading } = useQuery({
     queryKey: ["customers"],
@@ -42,6 +47,12 @@ const CustomersPage = () => {
   const { data: sales = [] } = useQuery({
     queryKey: ["sales"],
     queryFn: () => salesApi.list(),
+  });
+
+  const { data: activityData, isLoading: activityLoading, isError: activityError } = useQuery({
+    queryKey: ["customers", logCustomer?.id, "activity-log"],
+    queryFn: () => customersApi.getActivityLog(logCustomer!.id),
+    enabled: Boolean(logCustomer?.id),
   });
 
   const createMutation = useMutation({
@@ -66,19 +77,6 @@ const CustomersPage = () => {
       toast.success("Customer updated");
     },
     onError: (err: Error) => toast.error(err.message || "Failed to update customer"),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) =>
-      customersApi.delete(id, {
-        deletedBy: (user?.name?.trim() || user?.username?.trim() || "Unknown") || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
-      setDeleteTarget(null);
-      toast.success("Customer removed from list (record kept in database)");
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to remove customer"),
   });
 
   const openAdd = () => {
@@ -109,14 +107,6 @@ const CustomersPage = () => {
     }
   };
 
-  const confirmDelete = (c: Customer) => setDeleteTarget(c);
-  const doDelete = () => {
-    if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
-  };
-
-  const customerSales = historyCustomer
-    ? sales.filter((s) => s.customerId === historyCustomer.id)
-    : [];
   const getPurchaseCount = (customerId: string) =>
     sales.filter((s) => s.customerId === customerId).length;
 
@@ -160,9 +150,9 @@ const CustomersPage = () => {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <button
-                        onClick={() => setHistoryCustomer(c)}
+                        onClick={() => setLogCustomer(c)}
                         className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        title="View history"
+                        title="Activity log"
                       >
                         <Eye className="h-4 w-4" />
                       </button>
@@ -173,15 +163,6 @@ const CustomersPage = () => {
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
-                      {isAdmin && (
-                        <button
-                          onClick={() => confirmDelete(c)}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title="Remove from list (soft delete)"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -230,56 +211,47 @@ const CustomersPage = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove customer from list?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
-              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={doDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? "Removing…" : "Remove from list"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={!!historyCustomer} onOpenChange={() => setHistoryCustomer(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Purchase History — {historyCustomer?.name}</DialogTitle>
-          </DialogHeader>
-          {customerSales.length === 0 ? (
-            <p className="py-4 text-center text-muted-foreground">No purchase history</p>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-auto">
-              {customerSales.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex justify-between rounded-lg bg-muted px-4 py-2.5 text-sm"
-                >
-                  <div>
-                    <p className="font-medium">
-                      {(s.items ?? []).map((i) => i.productName ?? i.product?.name).filter(Boolean).join(", ") || "—"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {s.date ? formatDateTimePK(s.date) : "—"}
-                    </p>
-                  </div>
-                  <span className="font-semibold">${Number(s.total).toFixed(2)}</span>
+      <Sheet open={!!logCustomer} onOpenChange={(open) => !open && setLogCustomer(null)}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-lg">
+          <SheetHeader className="text-left">
+            <SheetTitle>Customer activity</SheetTitle>
+            {logCustomer ? (
+              <p className="text-sm font-normal text-muted-foreground">{logCustomer.name}</p>
+            ) : null}
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            {activityLoading ? (
+              <p className="text-sm text-muted-foreground py-6">Loading…</p>
+            ) : activityError ? (
+              <p className="text-sm text-destructive py-6">Could not load activity.</p>
+            ) : !activityData?.entries?.length ? (
+              <p className="text-sm text-muted-foreground py-6">No activity recorded for this customer yet.</p>
+            ) : (
+              <ScrollArea className="h-[min(70vh,32rem)] pr-3">
+                <div className="space-y-2 pb-4">
+                  {activityData.entries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2.5 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={`font-medium ${activityKindLabelClass(entry.kind)}`}>{entry.title}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatDateTimePK(entry.at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/90 leading-snug">{entry.detail}</p>
+                      {entry.meta ? (
+                        <p className="mt-1 text-xs text-muted-foreground">By {entry.meta}</p>
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };

@@ -1,37 +1,41 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Supplier } from "@/types/pos";
-import { useAuth } from "@/context/AuthContext";
-import { suppliersApi, purchasesApi } from "@/lib/api";
+import { suppliersApi, purchasesApi, type SupplierActivityEntry } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Pencil, Trash2, Eye } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, Pencil, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { formatDateTimePK } from "@/lib/utils";
 
 const emptySupplier = { name: "", phone: "", email: "" };
 
+function activityKindLabelClass(kind: SupplierActivityEntry["kind"]) {
+  switch (kind) {
+    case "purchase":
+      return "text-blue-600 dark:text-blue-400";
+    case "purchase_payment":
+    case "khata_payment":
+      return "text-emerald-600 dark:text-emerald-400";
+    case "khata_udhaar":
+      return "text-amber-600 dark:text-amber-400";
+    case "created":
+    default:
+      return "text-muted-foreground";
+  }
+}
+
 const SuppliersPage = () => {
-  const { user, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [form, setForm] = useState(emptySupplier);
-  const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
+  const [logSupplier, setLogSupplier] = useState<Supplier | null>(null);
 
   const { data: suppliers = [], isLoading: suppliersLoading } = useQuery({
     queryKey: ["suppliers"],
@@ -41,6 +45,12 @@ const SuppliersPage = () => {
   const { data: purchases = [] } = useQuery({
     queryKey: ["purchases"],
     queryFn: () => purchasesApi.list(),
+  });
+
+  const { data: activityData, isLoading: activityLoading, isError: activityError } = useQuery({
+    queryKey: ["suppliers", logSupplier?.id, "activity-log"],
+    queryFn: () => suppliersApi.getActivityLog(logSupplier!.id),
+    enabled: Boolean(logSupplier?.id),
   });
 
   const createMutation = useMutation({
@@ -70,19 +80,6 @@ const SuppliersPage = () => {
       toast.success("Supplier updated");
     },
     onError: (err: Error) => toast.error(err.message || "Failed to update supplier"),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) =>
-      suppliersApi.delete(id, {
-        deletedBy: (user?.name?.trim() || user?.username?.trim() || "Unknown") || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      setDeleteTarget(null);
-      toast.success("Supplier removed from list (record kept in database)");
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to remove supplier"),
   });
 
   const openAdd = () => {
@@ -125,14 +122,6 @@ const SuppliersPage = () => {
     }
   };
 
-  const confirmDelete = (s: Supplier) => setDeleteTarget(s);
-  const doDelete = () => {
-    if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
-  };
-
-  const supplierPurchases = historySupplier
-    ? purchases.filter((p) => p.supplierId === historySupplier.id)
-    : [];
   const getPurchaseCount = (supplierId: string) =>
     purchases.filter((p) => p.supplierId === supplierId).length;
 
@@ -169,9 +158,9 @@ const SuppliersPage = () => {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <button
-                        onClick={() => setHistorySupplier(s)}
+                        onClick={() => setLogSupplier(s)}
                         className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        title="View purchase history"
+                        title="Activity log"
                       >
                         <Eye className="h-4 w-4" />
                       </button>
@@ -182,15 +171,6 @@ const SuppliersPage = () => {
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
-                      {isAdmin && (
-                        <button
-                          onClick={() => confirmDelete(s)}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title="Remove from list (soft delete)"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -250,59 +230,47 @@ const SuppliersPage = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove supplier from list?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will remove &quot;{deleteTarget?.name}&quot; from the list immediately. When you click
-              &quot;Sync with MySQL&quot; in the sidebar, the deletion is applied to the main database.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={doDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? "Removing…" : "Remove from list"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={!!historySupplier} onOpenChange={() => setHistorySupplier(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Purchase History — {historySupplier?.name}</DialogTitle>
-          </DialogHeader>
-          {supplierPurchases.length === 0 ? (
-            <p className="py-4 text-center text-muted-foreground">No purchase history</p>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-auto">
-              {supplierPurchases.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex justify-between rounded-lg bg-muted px-4 py-2.5 text-sm"
-                >
-                  <div>
-                    <p className="font-medium">
-                      {(p.items ?? [])
-                        .map((i) => `${i.productName ?? ""} (${i.quantity})`)
-                        .filter(Boolean)
-                        .join(", ") || "—"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {p.date ? formatDateTimePK(p.date) : "—"}
-                    </p>
-                  </div>
-                  <span className="font-semibold">${Number(p.total).toFixed(2)}</span>
+      <Sheet open={!!logSupplier} onOpenChange={(open) => !open && setLogSupplier(null)}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-lg">
+          <SheetHeader className="text-left">
+            <SheetTitle>Supplier activity</SheetTitle>
+            {logSupplier ? (
+              <p className="text-sm font-normal text-muted-foreground">{logSupplier.name}</p>
+            ) : null}
+          </SheetHeader>
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            {activityLoading ? (
+              <p className="text-sm text-muted-foreground py-6">Loading…</p>
+            ) : activityError ? (
+              <p className="text-sm text-destructive py-6">Could not load activity.</p>
+            ) : !activityData?.entries?.length ? (
+              <p className="text-sm text-muted-foreground py-6">No activity recorded for this supplier yet.</p>
+            ) : (
+              <ScrollArea className="h-[min(70vh,32rem)] pr-3">
+                <div className="space-y-2 pb-4">
+                  {activityData.entries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2.5 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={`font-medium ${activityKindLabelClass(entry.kind)}`}>{entry.title}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatDateTimePK(entry.at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/90 leading-snug">{entry.detail}</p>
+                      {entry.meta ? (
+                        <p className="mt-1 text-xs text-muted-foreground">By {entry.meta}</p>
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };
